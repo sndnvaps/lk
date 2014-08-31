@@ -34,7 +34,7 @@
 static int sleep_thread(void *arg)
 {
 	for (;;) {
-		printf("sleeper %p\n", current_thread);
+		printf("sleeper %p\n", get_current_thread());
 		thread_sleep(rand() % 500);
 	}
 	return 0;
@@ -58,10 +58,10 @@ static mutex_t sem_test_mutex;
 
 static int semaphore_producer(void *unused)
 {
-	printf("semaphore producer %p starting up, running for %d iterations\n", current_thread, sem_total_its);
+	printf("semaphore producer %p starting up, running for %d iterations\n", get_current_thread(), sem_total_its);
 
 	for (int x = 0; x < sem_total_its; x++) {
-		sem_post(&sem);
+		sem_post(&sem, true);
 	}
 
 	return 0;
@@ -81,10 +81,10 @@ static int semaphore_consumer(void *unused)
 	sem_remaining_its -= iterations;
 	mutex_release(&sem_test_mutex);
 
-	printf("semaphore consumer %p starting up, running for %u iterations\n", current_thread, iterations);
+	printf("semaphore consumer %p starting up, running for %u iterations\n", get_current_thread(), iterations);
 	for (unsigned int x = 0; x < iterations; x++)
 		sem_wait(&sem);
-	printf("semaphore consumer %p done\n", current_thread);
+	printf("semaphore consumer %p done\n", get_current_thread());
 	atomic_add(&sem_threads, -1);
 	return 0;
 }
@@ -136,7 +136,7 @@ static int mutex_thread(void *arg)
 
 	mutex_t *m = (mutex_t *)arg;
 
-	printf("mutex tester thread %p starting up, will go for %d iterations\n", current_thread, iterations);
+	printf("mutex tester thread %p starting up, will go for %d iterations\n", get_current_thread(), iterations);
 
 	for (i = 0; i < iterations; i++) {
 		mutex_acquire(m);
@@ -144,7 +144,7 @@ static int mutex_thread(void *arg)
 		if (shared != 0)
 			panic("someone else has messed with the shared data\n");
 
-		shared = (int)current_thread;
+		shared = (intptr_t)get_current_thread();
 		thread_yield();
 		shared = 0;
 
@@ -257,17 +257,17 @@ static int event_signaller(void *arg)
 
 static int event_waiter(void *arg)
 {
-	int count = (int)arg;
+	int count = (intptr_t)arg;
 
 	printf("event waiter starting\n");
 
 	while (count > 0) {
-		printf("%p: waiting on event...\n", current_thread);
+		printf("%p: waiting on event...\n", get_current_thread());
 		if (event_wait(&e) < 0) {
-			printf("%p: event_wait() returned error\n", current_thread);
+			printf("%p: event_wait() returned error\n", get_current_thread());
 			return -1;
 		}
-		printf("%p: done waiting on event...\n", current_thread);
+		printf("%p: done waiting on event...\n", get_current_thread());
 		thread_yield();
 		count--;
 	}
@@ -326,7 +326,7 @@ void event_test(void)
 static int quantum_tester(void *arg)
 {
 	for (;;) {
-		printf("%p: in this thread. rq %d\n", current_thread, current_thread->remaining_quantum);
+		printf("%p: in this thread. rq %d\n", get_current_thread(), get_current_thread()->remaining_quantum);
 	}
 	return 0;
 }
@@ -347,7 +347,7 @@ static int context_switch_tester(void *arg)
 	int i;
 	uint total_count = 0;
 	const int iter = 100000;
-	int thread_count = (int)arg;
+	int thread_count = (intptr_t)arg;
 
 	event_wait(&context_switch_event);
 
@@ -402,7 +402,7 @@ static volatile int atomic_count;
 
 static int atomic_tester(void *arg)
 {
-	int add = (int)arg;
+	int add = (intptr_t)arg;
 	int i;
 
 	TRACEF("add %d\n", add);
@@ -450,11 +450,7 @@ static volatile int preempt_count;
 
 static int preempt_tester(void *arg)
 {
-#define COUNT (8*1024*1024)
-
-	int i;
-	for (i = 0; i < COUNT; i++)
-		__asm__ volatile("nop");
+	spin(1000000);
 
 	printf("exiting ts %lld\n", current_time_hires());
 
@@ -465,12 +461,14 @@ static int preempt_tester(void *arg)
 
 static void preempt_test(void)
 {
+	/* create 5 threads, let them run. If the system is properly timer preempting,
+	 * the threads should interleave each other at a fine enough granularity so
+	 * that they complete at roughly the same time. */
 	printf("testing preemption\n");
 
 	preempt_count = 5;
 
-	int i;
-	for (i = 0; i < preempt_count; i++)
+	for (int i = 0; i < preempt_count; i++)
 		thread_detach_and_resume(thread_create("preempt tester", &preempt_tester, NULL, LOW_PRIORITY, DEFAULT_STACK_SIZE));
 
 	while (preempt_count > 0) {
@@ -478,6 +476,25 @@ static void preempt_test(void)
 	}
 
 	printf("done with preempt test, above time stamps should be very close\n");
+
+	/* do the same as above, but mark the threads as real time, which should
+	 * effectively disable timer based preemption for them. They should
+	 * complete in order, about a second apart. */
+	printf("testing real time preemption\n");
+
+	preempt_count = 5;
+
+	for (int i = 0; i < preempt_count; i++) {
+		thread_t *t = thread_create("preempt tester", &preempt_tester, NULL, LOW_PRIORITY, DEFAULT_STACK_SIZE);
+		thread_set_real_time(t);
+		thread_detach_and_resume(t);
+	}
+
+	while (preempt_count > 0) {
+		thread_sleep(1000);
+	}
+
+	printf("done with real-time preempt test, above time stamps should be 1 second apart\n");
 }
 
 int thread_tests(void)
@@ -495,3 +512,5 @@ int thread_tests(void)
 
 	return 0;
 }
+
+/* vim: set ts=4 sw=4 noexpandtab: */

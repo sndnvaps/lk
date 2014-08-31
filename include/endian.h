@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Travis Geiselbrecht
+ * Copyright (c) 2008-2014 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -25,44 +25,35 @@
 
 #include <sys/types.h>
 
-#ifndef LITTLE_ENDIAN
-#define LITTLE_ENDIAN 1234
-#endif
-#ifndef BIG_ENDIAN
-#define BIG_ENDIAN 4321
+#ifndef __BYTE_ORDER__
+#error Compiler does not provide __BYTE_ORDER__
 #endif
 
-#if __POWERPC__
-#include <ppc_intrinsics.h>
-#endif
-
-#if defined(ARCH_ARM)
-#define BYTE_ORDER LITTLE_ENDIAN
-#endif
-
-#if defined(__i386__) || defined(_X86_)
-#define BYTE_ORDER LITTLE_ENDIAN
-#endif
-
-#ifndef BYTE_ORDER
-#error "need to get the BYTE_ORDER define from somewhere"
-#endif
+/* the compiler provides it, use what it says */
+#define LITTLE_ENDIAN __ORDER_LITTLE_ENDIAN__
+#define BIG_ENDIAN __ORDER_BIG_ENDIAN__
+#define BYTE_ORDER __BYTE_ORDER__
 
 // define a macro that unconditionally swaps
 #define SWAP_32(x) \
     (((uint32_t)(x) << 24) | (((uint32_t)(x) & 0xff00) << 8) |(((uint32_t)(x) & 0x00ff0000) >> 8) | ((uint32_t)(x) >> 24))
 #define SWAP_16(x) \
     ((((uint16_t)(x) & 0xff) << 8) | ((uint16_t)(x) >> 8))
+#define SWAP_64(x) ((((uint64_t)(SWAP_32((uint64_t)(x)))) << 32) | (SWAP_32(((uint64_t)(x)) >> 32)))
 
 // standard swap macros
 #if BYTE_ORDER == BIG_ENDIAN
+#define LE64(val) SWAP_64(val)
 #define LE32(val) SWAP_32(val)
 #define LE16(val) SWAP_16(val)
+#define BE64(val) (val)
 #define BE32(val) (val)
 #define BE16(val) (val)
 #else
+#define LE64(val) (val)
 #define LE32(val) (val)
 #define LE16(val) (val)
+#define BE64(val) SWAP_64(val)
 #define BE32(val) SWAP_32(val)
 #define BE16(val) SWAP_16(val)
 #endif
@@ -80,6 +71,8 @@
 
 // some memory access macros
 #if __POWERPC__
+#include <ppc_intrinsics.h>
+
 #define READ_MEM_WORD(ptr)      __lwbrx((word *)(ptr), 0)
 #define READ_MEM_HALFWORD(ptr)  __lhbrx((halfword *)(ptr), 0)
 #define READ_MEM_BYTE(ptr)      (*(byte *)(ptr))

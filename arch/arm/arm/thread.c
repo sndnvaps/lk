@@ -52,7 +52,8 @@ static void initial_thread_func(void)
 	/* exit the implicit critical section we're within */
 	exit_critical_section();
 
-	ret = current_thread->entry(current_thread->arg);
+	thread_t *ct = get_current_thread();
+	ret = ct->entry(ct->arg);
 
 //	dprintf("initial_thread_func: thread %p exiting with %d\n", current_thread, ret);
 
@@ -76,11 +77,20 @@ void arch_thread_initialize(thread_t *t)
 
 	// set the stack pointer
 	t->arch.sp = (vaddr_t)frame;
+
+#if ARM_WITH_VFP
+    arm_fpu_thread_initialize(t);
+#endif
 }
 
 void arch_context_switch(thread_t *oldthread, thread_t *newthread)
 {
 //	dprintf("arch_context_switch: old %p (%s), new %p (%s)\n", oldthread, oldthread->name, newthread, newthread->name);
+#if ARM_WITH_VFP
+    arm_fpu_thread_swap(oldthread, newthread);
+#endif
+
 	arm_context_switch(&oldthread->arch.sp, newthread->arch.sp);
+
 }
 

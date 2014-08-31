@@ -18,7 +18,9 @@ MODULE_SRCS += \
 	$(LOCAL_DIR)/descriptor.c
 
 # set the default toolchain to x86 elf and set a #define
-TOOLCHAIN_PREFIX ?= i386-elf-
+ifndef TOOLCHAIN_PREFIX
+TOOLCHAIN_PREFIX := i386-elf-
+endif
 
 LIBGCC := $(shell $(TOOLCHAIN_PREFIX)gcc $(CFLAGS) -print-libgcc-file-name)
 #$(info LIBGCC = $(LIBGCC))
@@ -31,6 +33,8 @@ GLOBAL_CFLAGS += $(call cc-option,$(CC),-fno-stack-protector,)
 
 GLOBAL_COMPILEFLAGS += -fasynchronous-unwind-tables
 GLOBAL_COMPILEFLAGS += -gdwarf-2
+
+ARCH_OPTFLAGS := -O2
 
 # potentially generated files that should be cleaned out with clean make rule
 GENERATED += \

@@ -258,9 +258,9 @@ static int read_debug_line(const char **outbuffer, void *cookie)
 				case 0x8:
 					if (pos > 0) {
 						pos--;
-						fputs("\x1b[1D", stdout); // move to the left one
+						fputc('\b', stdout);
 						putchar(' ');
-						fputs("\x1b[1D", stdout); // move to the left one
+						fputc('\b', stdout); // move to the left one
 					}
 					break;
 
@@ -292,9 +292,9 @@ static int read_debug_line(const char **outbuffer, void *cookie)
 					if (pos > 0) {
 						pos--;
 						if (echo) {
-							fputs("\x1b[1D", stdout); // move to the left one
+							fputc('\b', stdout); // move to the left one
 							putchar(' ');
-							fputs("\x1b[1D", stdout); // move to the left one
+							fputc('\b', stdout); // move to the left one
 						}
 					}
 					break;
@@ -305,9 +305,9 @@ static int read_debug_line(const char **outbuffer, void *cookie)
 					while (pos > 0) {
 						pos--;
 						if (echo) {
-							fputs("\x1b[1D", stdout); // move to the left one
+							fputc('\b', stdout); // move to the left one
 							putchar(' ');
-							fputs("\x1b[1D", stdout); // move to the left one
+							fputc('\b', stdout); // move to the left one
 						}
 					}
 
@@ -529,8 +529,8 @@ static void convert_args(int argc, cmd_args *argv)
 	int i;
 
 	for (i = 0; i < argc; i++) {
-		argv[i].u = atoui(argv[i].str);
-		argv[i].i = atoi(argv[i].str);
+		argv[i].u = atoul(argv[i].str);
+		argv[i].i = atol(argv[i].str);
 
 		if (!strcmp(argv[i].str, "true") || !strcmp(argv[i].str, "on")) {
 			argv[i].b = true;
@@ -585,7 +585,7 @@ static status_t command_loop(int (*get_line)(const char **, void *), void *get_l
 //		dprintf("line = '%s'\n", buffer);
 
 		/* tokenize the line */
-		int argc = tokenize_command(buffer, &continuebuffer, outbuf, outbuflen, 
+		int argc = tokenize_command(buffer, &continuebuffer, outbuf, outbuflen,
 		                            args, MAX_NUM_ARGS);
 		if (argc < 0) {
 			if (showprompt)
@@ -788,7 +788,7 @@ static int cmd_test(int argc, const cmd_args *argv)
 
 	printf("argc %d, argv %p\n", argc, argv);
 	for (i = 0; i < argc; i++)
-		printf("\t%d: str '%s', i %d, u %#x, b %d\n", i, argv[i].str, argv[i].i, argv[i].u, argv[i].b);
+		printf("\t%d: str '%s', i %ld, u %#lx, b %d\n", i, argv[i].str, argv[i].i, argv[i].u, argv[i].b);
 
 	return 0;
 }

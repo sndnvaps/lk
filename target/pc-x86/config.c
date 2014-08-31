@@ -31,7 +31,10 @@
 #include <malloc.h>
 #include <string.h>
 #include <debug.h>
+
+#ifndef ARCH_X86_64
 #include <ffs.h>
+#endif
 
 #include <lwip/tcpip.h>
 
@@ -47,6 +50,7 @@ static const struct platform_uart_config uart0_config = {
 
 DEVICE_INSTANCE(uart, uart0, &uart0_config);
 
+#ifndef ARCH_X86_64
 static const struct platform_ide_config ide0_config = {
 };
 
@@ -59,9 +63,11 @@ static const struct platform_pcnet_config pcnet0_config = {
 };
 
 DEVICE_INSTANCE(netif, pcnet0, &pcnet0_config);
+#endif
 
 void target_init(void) {
 	//device_init_all();
+#ifndef ARCH_X86_64
 
 	device_init(device_get_by_name(ide, ide0));
 	ffs_mount(0, device_get_by_name(ide, ide0));
@@ -70,5 +76,6 @@ void target_init(void) {
 
 	device_init(device_get_by_name(netif, pcnet0));
 	class_netif_add(device_get_by_name(netif, pcnet0));
+#endif
 }
 

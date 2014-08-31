@@ -32,7 +32,7 @@
 
 static int fibo_thread(void *argv)
 {
-	int fibo = (int)argv;
+	long fibo = (intptr_t)argv;
 
 	thread_t *t[2];
 
@@ -73,13 +73,18 @@ int fibo(int argc, const cmd_args *argv)
 		return -1;
 	}
 
-	thread_t *t = thread_create("fibo", &fibo_thread, (void *)argv[1].u, DEFAULT_PRIORITY, DEFAULT_STACK_SIZE);
+	lk_time_t tim = current_time();
+
+	thread_t *t = thread_create("fibo", &fibo_thread, (void *)(uintptr_t)argv[1].u, DEFAULT_PRIORITY, DEFAULT_STACK_SIZE);
 	thread_resume(t);
 
 	int retcode;
 	thread_join(t, &retcode, INFINITE_TIME);
 
+	tim = current_time() - tim;
+
 	printf("fibo %d\n", retcode);
+	printf("took %u msecs to calculate\n", tim);
 
 	return NO_ERROR;
 }

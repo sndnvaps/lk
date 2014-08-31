@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2012 Travis Geiselbrecht
+ * Copyright (c) 2008-2014 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -51,6 +51,7 @@ enum thread_tls_list {
 #define THREAD_FLAG_DETACHED 0x1
 #define THREAD_FLAG_FREE_STACK 0x2
 #define THREAD_FLAG_FREE_STRUCT 0x4
+#define THREAD_FLAG_REAL_TIME 0x8
 
 #define THREAD_MAGIC 'thrd'
 
@@ -122,6 +123,7 @@ void thread_sleep(lk_time_t delay);
 status_t thread_detach(thread_t *t);
 status_t thread_join(thread_t *t, int *retcode, lk_time_t timeout);
 status_t thread_detach_and_resume(thread_t *t);
+status_t thread_set_real_time(thread_t *t);
 
 void dump_thread(thread_t *t);
 void dump_all_threads(void);
@@ -130,15 +132,14 @@ void dump_all_threads(void);
 void thread_yield(void); /* give up the cpu voluntarily */
 void thread_preempt(void); /* get preempted (inserted into head of run queue) */
 void thread_block(void); /* block on something and reschedule */
+void thread_unblock(thread_t *t, bool resched); /* go back in the run queue */
 
 /* called on every timer tick for the scheduler to do quantum expiration */
 enum handler_return thread_timer_tick(void);
 
 /* the current thread */
-extern thread_t *current_thread;
-
-/* the idle thread */
-extern thread_t *idle_thread;
+thread_t *get_current_thread(void);
+void set_current_thread(thread_t *);
 
 /* critical sections */
 extern int critical_section_count;
@@ -174,13 +175,13 @@ static inline void dec_critical_section(void) { critical_section_count--; }
 /* thread local storage */
 static inline __ALWAYS_INLINE uint32_t tls_get(uint entry)
 {
-	return current_thread->tls[entry];
+	return get_current_thread()->tls[entry];
 }
 
 static inline __ALWAYS_INLINE uint32_t tls_set(uint entry, uint32_t val)
 {
-	uint32_t oldval = current_thread->tls[entry];
-	current_thread->tls[entry] = val;
+	uint32_t oldval = get_current_thread()->tls[entry];
+	get_current_thread()->tls[entry] = val;
 	return oldval;
 }
 

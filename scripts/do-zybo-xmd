@@ -1,0 +1,4 @@
+#!/bin/sh
+
+make zybo-test -j &&
+xmd -tcl scripts/zybo-xmd.tcl

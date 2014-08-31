@@ -55,9 +55,6 @@ struct thread_stats thread_stats;
 /* global thread list */
 static struct list_node thread_list;
 
-/* the current thread */
-thread_t *current_thread;
-
 /* the global critical section count */
 int critical_section_count;
 
@@ -69,7 +66,7 @@ static uint32_t run_queue_bitmap;
 static thread_t bootstrap_thread;
 
 /* the idle thread */
-thread_t *idle_thread;
+static thread_t *idle_thread;
 
 /* local routines */
 static void thread_resched(void);
@@ -182,6 +179,7 @@ thread_t *thread_create_etc(thread_t *t, const char *name, thread_start_routine 
 	t->flags = flags;
 
 	/* inheirit thread local storage from the parent */
+	thread_t *current_thread = get_current_thread();
 	int i;
 	for (i=0; i < MAX_TLS_ENTRY; i++)
 		t->tls[i] = current_thread->tls[i];
@@ -200,6 +198,40 @@ thread_t *thread_create_etc(thread_t *t, const char *name, thread_start_routine 
 thread_t *thread_create(const char *name, thread_start_routine entry, void *arg, int priority, size_t stack_size)
 {
 	return thread_create_etc(NULL, name, entry, arg, priority, NULL, stack_size);
+}
+
+/**
+ * @brief Flag a thread as real time
+ *
+ * @param t Thread to flag
+ *
+ * @return NO_ERROR on success
+ */
+status_t thread_set_real_time(thread_t *t)
+{
+	if (!t)
+		return ERR_INVALID_ARGS;
+
+#if THREAD_CHECKS
+	ASSERT(t->magic == THREAD_MAGIC);
+#endif
+
+	enter_critical_section();
+#if PLATFORM_HAS_DYNAMIC_TIMER
+	if (t == get_current_thread()) {
+		/* if we're currently running, cancel the preemption timer. */
+		timer_cancel(&preempt_timer);
+	}
+#endif
+	t->flags |= THREAD_FLAG_REAL_TIME;
+	exit_critical_section();
+
+	return NO_ERROR;
+}
+
+static bool thread_is_real_time(thread_t *t)
+{
+	return !!(t->flags & THREAD_FLAG_REAL_TIME);
 }
 
 /**
@@ -299,6 +331,8 @@ status_t thread_detach(thread_t *t)
 
 	enter_critical_section();
 
+	thread_t *current_thread = get_current_thread();
+
 	/* if anyone is blocked on this thread, wake them up with a specific return code */
 	wait_queue_wake_all(&current_thread->retcode_wait_queue, false, ERR_THREAD_DETACHED);
 
@@ -323,6 +357,8 @@ status_t thread_detach(thread_t *t)
  */
 void thread_exit(int retcode)
 {
+	thread_t *current_thread = get_current_thread();
+
 #if THREAD_CHECKS
 	ASSERT(current_thread->magic == THREAD_MAGIC);
 	ASSERT(current_thread->state == THREAD_RUNNING);
@@ -381,6 +417,8 @@ void thread_resched(void)
 {
 	thread_t *oldthread;
 	thread_t *newthread;
+
+	thread_t *current_thread = get_current_thread();
 
 //	printf("thread_resched: current %p: ", current_thread);
 //	dump_thread(current_thread);
@@ -446,13 +484,16 @@ void thread_resched(void)
 #endif
 
 #if PLATFORM_HAS_DYNAMIC_TIMER
-	/* if we're switching from idle to a real thread, set up a periodic
-	 * timer to run our preemption tick.
-	 */
-	if (oldthread == idle_thread) {
+	if (thread_is_real_time(newthread)) {
+		if (!thread_is_real_time(oldthread)) {
+			/* if we're switching from a non real time to a real time, cancel
+			 * the preemption timer. */
+			timer_cancel(&preempt_timer);
+		}
+	} else if (thread_is_real_time(oldthread)) {
+		/* if we're switching from a real time (or idle thread) to a regular one,
+		 * set up a periodic timer to run our preemption tick. */
 		timer_set_periodic(&preempt_timer, 10, (timer_callback)thread_timer_tick, NULL);
-	} else if (newthread == idle_thread) {
-		timer_cancel(&preempt_timer);
 	}
 #endif
 
@@ -461,7 +502,7 @@ void thread_resched(void)
 
 	/* do the switch */
 	oldthread->saved_critical_section_count = critical_section_count;
-	current_thread = newthread;
+	set_current_thread(newthread);
 	critical_section_count = newthread->saved_critical_section_count;
 	arch_context_switch(oldthread, newthread);
 }
@@ -477,6 +518,8 @@ void thread_resched(void)
  */
 void thread_yield(void)
 {
+	thread_t *current_thread = get_current_thread();
+
 #if THREAD_CHECKS
 	ASSERT(current_thread->magic == THREAD_MAGIC);
 	ASSERT(current_thread->state == THREAD_RUNNING);
@@ -512,12 +555,13 @@ void thread_yield(void)
  */
 void thread_preempt(void)
 {
+	thread_t *current_thread = get_current_thread();
+
 #if THREAD_CHECKS
 	ASSERT(current_thread->magic == THREAD_MAGIC);
 	ASSERT(current_thread->state == THREAD_RUNNING);
+	ASSERT(in_critical_section());
 #endif
-
-	enter_critical_section();
 
 #if THREAD_STATS
 	if (current_thread != idle_thread)
@@ -533,8 +577,6 @@ void thread_preempt(void)
 	else
 		insert_in_run_queue_tail(current_thread); /* if we're out of quantum, go to the tail of the queue */
 	thread_resched();
-
-	exit_critical_section();
 }
 
 /**
@@ -549,29 +591,45 @@ void thread_preempt(void)
  */
 void thread_block(void)
 {
+	thread_t *current_thread = get_current_thread();
+
 #if THREAD_CHECKS
 	ASSERT(current_thread->magic == THREAD_MAGIC);
 	ASSERT(current_thread->state == THREAD_BLOCKED);
+	ASSERT(in_critical_section());
 #endif
-
-	enter_critical_section();
 
 	/* we are blocking on something. the blocking code should have already stuck us on a queue */
 	thread_resched();
+}
 
-	exit_critical_section();
+void thread_unblock(thread_t *t, bool resched)
+{
+#if THREAD_CHECKS
+	ASSERT(t->magic == THREAD_MAGIC);
+	ASSERT(t->state == THREAD_BLOCKED);
+	ASSERT(in_critical_section());
+#endif
+
+	t->state = THREAD_READY;
+	insert_in_run_queue_head(t);
+	if (resched)
+		thread_resched();
 }
 
 enum handler_return thread_timer_tick(void)
 {
-	if (current_thread == idle_thread)
+	thread_t *current_thread = get_current_thread();
+
+	if (thread_is_real_time(current_thread))
 		return INT_NO_RESCHEDULE;
 
 	current_thread->remaining_quantum--;
-	if (current_thread->remaining_quantum <= 0)
+	if (current_thread->remaining_quantum <= 0) {
 		return INT_RESCHEDULE;
-	else
+	} else {
 		return INT_NO_RESCHEDULE;
+	}
 }
 
 /* timer callback to wake up a sleeping thread */
@@ -603,6 +661,8 @@ static enum handler_return thread_sleep_handler(timer_t *timer, lk_time_t now, v
 void thread_sleep(lk_time_t delay)
 {
 	timer_t timer;
+
+	thread_t *current_thread = get_current_thread();
 
 #if THREAD_CHECKS
 	ASSERT(current_thread->magic == THREAD_MAGIC);
@@ -645,7 +705,7 @@ void thread_init_early(void)
 	t->flags = THREAD_FLAG_DETACHED;
 	wait_queue_init(&t->retcode_wait_queue);
 	list_add_head(&thread_list, &t->thread_list_node);
-	current_thread = t;
+	set_current_thread(t);
 }
 
 /**
@@ -665,6 +725,7 @@ void thread_init(void)
  */
 void thread_set_name(const char *name)
 {
+	thread_t *current_thread = get_current_thread();
 	strlcpy(current_thread->name, name, sizeof(current_thread->name));
 }
 
@@ -679,7 +740,7 @@ void thread_set_priority(int priority)
 		priority = LOWEST_PRIORITY;
 	if (priority > HIGHEST_PRIORITY)
 		priority = HIGHEST_PRIORITY;
-	current_thread->priority = priority;
+	get_current_thread()->priority = priority;
 }
 
 /**
@@ -691,9 +752,14 @@ void thread_set_priority(int priority)
  */
 void thread_become_idle(void)
 {
+	idle_thread = get_current_thread();
+
 	thread_set_name("idle");
 	thread_set_priority(IDLE_PRIORITY);
-	idle_thread = current_thread;
+
+	/* mark the idle thread as real time, to avoid running the preemption
+	 * timer when it is scheduled. */
+	thread_set_real_time(idle_thread);
 
 	/* release the implicit boot critical section and yield to the scheduler */
 	exit_critical_section();
@@ -797,6 +863,8 @@ status_t wait_queue_block(wait_queue_t *wait, lk_time_t timeout)
 {
 	timer_t timer;
 
+	thread_t *current_thread = get_current_thread();
+
 #if THREAD_CHECKS
 	ASSERT(wait->magic == WAIT_QUEUE_MAGIC);
 	ASSERT(current_thread->state == THREAD_RUNNING);
@@ -846,6 +914,8 @@ int wait_queue_wake_one(wait_queue_t *wait, bool reschedule, status_t wait_queue
 {
 	thread_t *t;
 	int ret = 0;
+
+	thread_t *current_thread = get_current_thread();
 
 #if THREAD_CHECKS
 	ASSERT(wait->magic == WAIT_QUEUE_MAGIC);
@@ -898,6 +968,8 @@ int wait_queue_wake_all(wait_queue_t *wait, bool reschedule, status_t wait_queue
 {
 	thread_t *t;
 	int ret = 0;
+
+	thread_t *current_thread = get_current_thread();
 
 #if THREAD_CHECKS
 	ASSERT(wait->magic == WAIT_QUEUE_MAGIC);
@@ -990,4 +1062,5 @@ status_t thread_unblock_from_wait_queue(thread_t *t, status_t wait_queue_error)
 	return NO_ERROR;
 }
 
+/* vim: set ts=4 sw=4 noexpandtab: */
 

@@ -101,7 +101,16 @@ real_start:
 	movw %ax, %ss
 	
 	movl $_kstack, %esp
-	
+	/*We jumped here in protected mode in a code segment that migh not longer
+	  be valid , do a long jump to our code segment, we use retf instead of
+	  ljmp to be able to use relative labels */
+	movl $codesel, %ecx     /*Pushing our code segment */
+	push %ecx
+	movl $farjump, %ecx /*and jump address */
+	push %ecx
+	xorl %ecx, %ecx
+	retf    /*This instruction will jump to codesel:farjump */
+farjump:
 	/* zero the bss section */
 	movl $__bss_start, %edi	/* starting address of the bss */
 	movl $__bss_end, %ecx	/* find the length of the bss in bytes */
@@ -188,15 +197,6 @@ interrupt_common:
 
 .data
 .align 4
-
-/* define the heap end as read-write data containing the default end of the
- * heap. dynamic memory length discovery can update this value during init.
- * other archs can define this statically based on the memory layout of the
- * platform.
- */
-.global _heap_end
-_heap_end:
-	.int 4096*1024	/* default to 4MB total */
 
 .global _multiboot_info
 _multiboot_info:

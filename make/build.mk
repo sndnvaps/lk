@@ -1,3 +1,9 @@
+# use linker garbage collection, if requested
+ifeq ($(WITH_LINKER_GC),1)
+GLOBAL_COMPILEFLAGS += -ffunction-sections -fdata-sections
+GLOBAL_LDFLAGS += --gc-sections
+endif
+
 $(OUTBIN): $(OUTELF)
 	@echo generating image: $@
 	$(NOECHO)$(SIZE) $<
@@ -15,6 +21,10 @@ $(OUTELF): $(ALLMODULE_OBJS) $(EXTRA_OBJS) $(LINKER_SCRIPT)
 $(OUTELF).sym: $(OUTELF)
 	@echo generating symbols: $@
 	$(NOECHO)$(OBJDUMP) -t $< | $(CPPFILT) > $@
+
+$(OUTELF).sym.sorted: $(OUTELF)
+	@echo generating symbols: $@
+	$(NOECHO)$(OBJDUMP) -t $< | $(CPPFILT) | sort > $@
 
 $(OUTELF).lst: $(OUTELF)
 	@echo generating listing: $@

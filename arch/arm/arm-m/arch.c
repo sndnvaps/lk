@@ -31,33 +31,21 @@
 
 extern void *vectab;
 
-extern int _end_of_ram;
-void *_heap_end = &_end_of_ram;
-
-#if ARM_M_DYNAMIC_PRIORITY_SIZE
+#if ARM_CM_DYNAMIC_PRIORITY_SIZE
 unsigned int arm_cm_num_irq_pri_bits;
 unsigned int arm_cm_irq_pri_mask;
 #endif
 
 void arch_early_init(void)
 {
+	uint i;
+
 	arch_disable_ints();
 
 	/* set the vector table base */
 	SCB->VTOR = (uint32_t)&vectab;
 
-	/* clear any pending interrupts and set all the vectors to medium priority */
-	uint i;
-	uint groups = (SCnSCB->ICTR & 0xf) + 1;
-	for (i = 0; i < groups; i++) {
-		NVIC->ICER[i] = 0xffffffff;
-		NVIC->ICPR[i] = 0xffffffff;
-		for (uint j = 0; j < 32; j++) {
-			NVIC->IP[i*32 + j] = 128;   /* medium priority */
-		}
-	}
-
-#if ARM_M_DYNAMIC_PRIORITY_SIZE
+#if ARM_CM_DYNAMIC_PRIORITY_SIZE
 	/* number of priorities */
 	for (i=0; i < 7; i++) {
 		__set_BASEPRI(1 << i);
@@ -67,6 +55,16 @@ void arch_early_init(void)
 	arm_cm_num_irq_pri_bits = 8 - i;
 	arm_cm_irq_pri_mask = ~((1 << i) - 1) & 0xff;
 #endif
+
+	/* clear any pending interrupts and set all the vectors to medium priority */
+	uint groups = (SCnSCB->ICTR & 0xf) + 1;
+	for (i = 0; i < groups; i++) {
+		NVIC->ICER[i] = 0xffffffff;
+		NVIC->ICPR[i] = 0xffffffff;
+		for (uint j = 0; j < 32; j++) {
+			NVIC_SetPriority(i*32 + j, arm_cm_medium_priority());
+		}
+	}
 
 	/* leave BASEPRI at 0 */
 	__set_BASEPRI(0);
@@ -78,11 +76,11 @@ void arch_early_init(void)
 	SCB->SHCSR |= (SCB_SHCSR_USGFAULTENA_Msk | SCB_SHCSR_BUSFAULTENA_Msk | SCB_SHCSR_MEMFAULTENA_Msk);
 
 	/* set the svc and pendsv priority level to pretty low */
-	SCB->SHP[11-4] = arm_cm_lowest_priority();
-	SCB->SHP[14-4] = arm_cm_lowest_priority();
+	NVIC_SetPriority(SVCall_IRQn, arm_cm_lowest_priority());
+	NVIC_SetPriority(PendSV_IRQn, arm_cm_lowest_priority());
 
-	/* initialize the systick mechanism */
-	arm_cm_systick_init();
+	/* set systick to medium priority */
+	NVIC_SetPriority(SysTick_IRQn, arm_cm_medium_priority());
 }
 
 void arch_init(void)
@@ -139,3 +137,7 @@ void arm_cm_irq_exit(bool reschedule)
 	dec_critical_section();
 }
 
+void arch_chain_load(void *entry)
+{
+    PANIC_UNIMPLEMENTED;
+}

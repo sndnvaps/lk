@@ -1,0 +1,112 @@
+/*
+ * Copyright (c) 2014 Brian Swetland
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/types.h>
+
+#include "liblkboot.h"
+
+void usage(void) {
+	fprintf(stderr,
+"usage: lkboot <hostname> <command> ...\n"
+"\n"
+"       lkboot <hostname> flash <partition> <filename>\n"
+"       lkboot <hostname> erase <partition>\n"
+"       lkboot <hostname> fpga <bitfile>\n"
+"       lkboot <hostname> boot <binary>\n"
+"       lkboot <hostname> getsysparam <name>\n"
+"       lkboot <hostname> reboot\n"
+"\n"
+	);
+	exit(1);
+}
+
+void printsysparam(void *data, int len) {
+	unsigned char *x = data;
+	int i;
+	for (i = 0; i < len; i++) {
+		if ((x[i] < ' ') || (x[1] > 127)) goto printhex;
+	}
+	write(1, "\"", 1);
+	write(1, data, len);
+	write(1, "\"\n", 2);
+	return;
+printhex:
+	printf("[");
+	for (i = 0; i < len; i++) printf(" %02x", x[i]);
+	printf(" ]\n");
+}
+
+int main(int argc, char **argv) {
+	const char *host = argv[1];
+	const char *cmd = argv[2];
+	const char *args = argv[3];
+	const char *fn = NULL;
+	int fd = -1;
+
+	if (argc == 3) {
+		if (!strcmp(cmd, "reboot")) {
+			return lkboot_txn(host, cmd, fd, "");
+		} else {
+			usage();
+		}
+	}
+
+	if (argc < 4) usage();
+
+	if (!strcmp(cmd, "flash")) {
+		if (argc < 5) usage();
+		fn = argv[4];
+	} else if (!strcmp(cmd, "fpga")) {
+		fn = args;
+		args = "";
+	} else if (!strcmp(cmd, "boot")) {
+		fn = args;
+		args = "";
+	} else if (!strcmp(cmd, "erase")) {
+	} else if (!strcmp(cmd, "getsysparam")) {
+		if (lkboot_txn(host, cmd, -1, args) == 0) {
+			void *rbuf;
+			printsysparam(rbuf, lkboot_get_reply(&rbuf));
+			return 0;
+		} else {
+			return -1;
+		}
+	} else {
+		usage();
+	}
+	if (fn) {
+		if ((fd = open(fn, O_RDONLY)) < 0) {
+			fprintf(stderr, "error; cannot open '%s'\n", fn);
+			return -1;
+		}
+	}
+	return lkboot_txn(host, cmd, fd, args);
+}
+
+// vim: noexpandtab

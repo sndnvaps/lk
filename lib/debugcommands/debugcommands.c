@@ -31,6 +31,7 @@
 #include <platform.h>
 #include <platform/debug.h>
 #include <kernel/thread.h>
+#include <arch.h>
 
 #include <lib/console.h>
 
@@ -40,6 +41,7 @@ static int cmd_fill_mem(int argc, const cmd_args *argv);
 static int cmd_reset(int argc, const cmd_args *argv);
 static int cmd_memtest(int argc, const cmd_args *argv);
 static int cmd_copy_mem(int argc, const cmd_args *argv);
+static int cmd_chain(int argc, const cmd_args *argv);
 
 STATIC_COMMAND_START
 #if LK_DEBUGLEVEL > 0
@@ -57,18 +59,22 @@ STATIC_COMMAND_START
 #if LK_DEBUGLEVEL > 1
 	{ "mtest", "simple memory test", &cmd_memtest },
 #endif
+	{ "chain", "chain load another binary", &cmd_chain },
 STATIC_COMMAND_END(mem);
 
 static int cmd_display_mem(int argc, const cmd_args *argv)
 {
-	int size;
+	/* save the last address and len so we can continue where we left off */
+	static unsigned long address;
+	static size_t len;
 
-	if (argc < 3) {
+	if (argc < 3 && len == 0) {
 		printf("not enough arguments\n");
-		printf("%s <address> <length>\n", argv[0].str);
+		printf("%s [address] [length]\n", argv[0].str);
 		return -1;
 	}
 
+	int size;
 	if (strcmp(argv[0].str, "dw") == 0) {
 		size = 4;
 	} else if (strcmp(argv[0].str, "dh") == 0) {
@@ -77,8 +83,13 @@ static int cmd_display_mem(int argc, const cmd_args *argv)
 		size = 1;
 	}
 
-	unsigned long address = argv[1].u;
-	size_t len = argv[2].u;
+	if (argc >= 2) {
+		address = argv[1].u;
+	}
+	if (argc >= 3) {
+		len = argv[2].u;
+	}
+
 	unsigned long stop = address + len;
 	int count = 0;
 
@@ -248,5 +259,18 @@ static int cmd_memtest(int argc, const cmd_args *argv)
 	printf("done\n");
 
 	return 0;
+}
+
+static int cmd_chain(int argc, const cmd_args *argv)
+{
+    if (argc < 2) {
+        printf("not enough arguments\n");
+        printf("%s <address>\n", argv[0].str);
+        return -1;
+    }
+
+    arch_chain_load((void *)argv[1].u);
+
+    return 0;
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Travis Geiselbrecht
+ * Copyright (c) 2008-2013 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -23,16 +23,34 @@
 #ifndef __ARCH_ARM_H
 #define __ARCH_ARM_H
 
+#include <stdbool.h>
 #include <sys/types.h>
 #include <arch/arm/cores.h>
 #include <compiler.h>
 
+/* due to the cp15 accessors below, you're gonna have a bad time if you try
+ * to compile in thumb mode. Either compile in ARM only or get a thumb2 capable cpu.
+ */
+#if defined(__thumb__) && !defined(__thumb2__)
+#error this file unsupported in thumb1 mode
+#endif
+
 __BEGIN_CDECLS
 
+#if ARM_ISA_ARMV7
 #define DSB __asm__ volatile("dsb" ::: "memory")
+#define DMB __asm__ volatile("dmb" ::: "memory")
 #define ISB __asm__ volatile("isb" ::: "memory")
+#elif ARM_ISA_ARMV6
+#define DSB __asm__ volatile("mcr p15, 0, %0, c7, c10, 4" :: "r" (0) : "memory")
+#define ISB __asm__ volatile("mcr p15, 0, %0, c7, c5, 4" :: "r" (0) : "memory")
+#else
+#error unhandled arm isa
+#endif
 
 void arm_context_switch(vaddr_t *old_sp, vaddr_t new_sp);
+
+void arm_chain_load(paddr_t entry) __NO_RETURN;
 
 static inline uint32_t read_cpsr(void)
 {
@@ -43,11 +61,12 @@ static inline uint32_t read_cpsr(void)
 }
 
 struct arm_iframe {
+#if ARM_WITH_VFP
+	uint32_t fpexc;
+	uint32_t __pad;
+#endif
 	uint32_t usp;
 	uint32_t ulr;
-#if ARM_ARCH_LEVEL < 6
-	uint32_t spsr;
-#endif
 	uint32_t r0;
 	uint32_t r1;
 	uint32_t r2;
@@ -55,17 +74,16 @@ struct arm_iframe {
 	uint32_t r12;
 	uint32_t lr;
 	uint32_t pc;
-#if ARM_ARCH_LEVEL >= 6
 	uint32_t spsr;
-#endif
 };
 
 struct arm_fault_frame {
-	uint32_t spsr;
 	uint32_t usp;
 	uint32_t ulr;
 	uint32_t r[13];
+	uint32_t lr;
 	uint32_t pc;
+	uint32_t spsr;
 };
 
 #define MODE_MASK 0x1f
@@ -89,13 +107,79 @@ struct arm_mode_regs {
 
 void arm_save_mode_regs(struct arm_mode_regs *regs);
 
-uint32_t arm_read_cr1(void);
-void arm_write_cr1(uint32_t val);
-uint32_t arm_read_cr1_aux(void);
-void arm_write_cr1_aux(uint32_t val);
-void arm_write_ttbr(uint32_t val);
-void arm_write_dacr(uint32_t val);
-void arm_invalidate_tlb(void);
+#define GEN_CP15_REG_FUNCS(reg, op1, c1, c2, op2) \
+static inline __ALWAYS_INLINE uint32_t arm_read_##reg(void) { \
+	uint32_t val; \
+	__asm__ volatile("mrc p15, " #op1 ", %0, " #c1 ","  #c2 "," #op2 : "=r" (val)); \
+	return val; \
+} \
+\
+static inline __ALWAYS_INLINE void arm_write_##reg(uint32_t val) { \
+	__asm__ volatile("mcr p15, " #op1 ", %0, " #c1 ","  #c2 "," #op2 :: "r" (val)); \
+	ISB; \
+}
+
+/* armv6+ control regs */
+GEN_CP15_REG_FUNCS(sctlr, 0, c1, c0, 0);
+GEN_CP15_REG_FUNCS(actlr, 0, c1, c0, 1);
+GEN_CP15_REG_FUNCS(cpacr, 0, c1, c0, 2);
+
+GEN_CP15_REG_FUNCS(ttbr, 0, c2, c0, 0);
+GEN_CP15_REG_FUNCS(ttbr0, 0, c2, c0, 0);
+GEN_CP15_REG_FUNCS(ttbr1, 0, c2, c0, 1);
+GEN_CP15_REG_FUNCS(ttbcr, 0, c2, c0, 2);
+GEN_CP15_REG_FUNCS(dacr, 0, c3, c0, 0);
+GEN_CP15_REG_FUNCS(dfsr, 0, c5, c0, 0);
+GEN_CP15_REG_FUNCS(ifsr, 0, c5, c0, 1);
+GEN_CP15_REG_FUNCS(dfar, 0, c6, c0, 0);
+GEN_CP15_REG_FUNCS(wfar, 0, c6, c0, 1);
+GEN_CP15_REG_FUNCS(ifar, 0, c6, c0, 2);
+
+GEN_CP15_REG_FUNCS(fcseidr, 0, c13, c0, 0);
+GEN_CP15_REG_FUNCS(contextidr, 0, c13, c0, 1);
+GEN_CP15_REG_FUNCS(tpidrurw, 0, c13, c0, 2);
+GEN_CP15_REG_FUNCS(tpidruro, 0, c13, c0, 3);
+GEN_CP15_REG_FUNCS(tpidrprw, 0, c13, c0, 4);
+
+/* armv7+ */
+GEN_CP15_REG_FUNCS(midr, 0, c0, c0, 0);
+GEN_CP15_REG_FUNCS(mpidr, 0, c0, c0, 5);
+GEN_CP15_REG_FUNCS(vbar, 0, c12, c0, 0);
+
+GEN_CP15_REG_FUNCS(ats1cpr, 0, c7, c8, 0);
+GEN_CP15_REG_FUNCS(ats1cpw, 0, c7, c8, 1);
+GEN_CP15_REG_FUNCS(ats1cur, 0, c7, c8, 2);
+GEN_CP15_REG_FUNCS(ats1cuw, 0, c7, c8, 3);
+GEN_CP15_REG_FUNCS(ats12nsopr, 0, c7, c8, 4);
+GEN_CP15_REG_FUNCS(ats12nsopw, 0, c7, c8, 5);
+GEN_CP15_REG_FUNCS(ats12nsour, 0, c7, c8, 6);
+GEN_CP15_REG_FUNCS(ats12nsouw, 0, c7, c8, 7);
+GEN_CP15_REG_FUNCS(par, 0, c7, c4, 0);
+
+/* tlb registers */
+GEN_CP15_REG_FUNCS(tlbiallis, 0, c8, c3, 0);
+GEN_CP15_REG_FUNCS(tlbimvais, 0, c8, c3, 1);
+GEN_CP15_REG_FUNCS(tlbiasidis, 0, c8, c3, 2);
+GEN_CP15_REG_FUNCS(tlbimvaais, 0, c8, c3, 3);
+GEN_CP15_REG_FUNCS(itlbiall, 0, c8, c5, 0);
+GEN_CP15_REG_FUNCS(itlbimva, 0, c8, c5, 1);
+GEN_CP15_REG_FUNCS(itlbiasid, 0, c8, c5, 2);
+GEN_CP15_REG_FUNCS(dtlbiall, 0, c8, c6, 0);
+GEN_CP15_REG_FUNCS(dtlbimva, 0, c8, c6, 1);
+GEN_CP15_REG_FUNCS(dtlbiasid, 0, c8, c6, 2);
+GEN_CP15_REG_FUNCS(tlbiall, 0, c8, c7, 0);
+GEN_CP15_REG_FUNCS(tlbimva, 0, c8, c7, 1);
+GEN_CP15_REG_FUNCS(tlbiasid, 0, c8, c7, 2);
+GEN_CP15_REG_FUNCS(tlbimvaa, 0, c8, c7, 3);
+
+/* fpu */
+void arm_fpu_set_enable(bool enable);
+#if ARM_WITH_VFP
+void arm_fpu_undefined_instruction(struct arm_iframe *frame);
+struct thread;
+void arm_fpu_thread_initialize(struct thread *t);
+void arm_fpu_thread_swap(struct thread *oldthread, struct thread *newthread);
+#endif
 
 __END_CDECLS
 
