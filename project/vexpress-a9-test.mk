@@ -1,7 +1,3 @@
-# top level project rules for the armemu-test project
-#
-LOCAL_DIR := $(GET_LOCAL_DIR)
-
 TARGET := vexpress-a9
 
 MODULES += \
@@ -12,6 +8,8 @@ MODULES += \
 	lib/aes/test \
 	lib/bytes \
 	lib/cksum \
-	lib/debugcommands
+	lib/debugcommands \
+	lib/libm
 
+WITH_LINKER_GC := 0
 

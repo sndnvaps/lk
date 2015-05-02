@@ -20,8 +20,15 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include <stdio.h>
+#include <dev/gpio.h>
+#include <target/gpioconfig.h>
+#include <lib/pktbuf.h>
+#include <kernel/vm.h>
 #include <platform/zynq.h>
 #include <platform/gem.h>
+
+#define ZYNQ_PKTBUF_CNT 128
 
 zynq_pll_cfg_tree_t zynq_pll_cfg = {
     .arm = {
@@ -75,6 +82,17 @@ const unsigned long zynq_ddr_cfg[] = {
 };
 
 const unsigned long zynq_ddr_cfg_cnt = countof(zynq_ddr_cfg);
+
+const zynq_ddriob_cfg_t zynq_ddriob_cfg = {
+    .addr0 = DDRIOB_OUTPUT_EN(0x3),
+    .addr1 = DDRIOB_OUTPUT_EN(0x3),
+    .data0 = DDRIOB_INP_TYPE(1) | DDRIOB_TERM_EN | DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3),
+    .data1 = DDRIOB_INP_TYPE(1) | DDRIOB_TERM_EN | DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3),
+    .diff0 = DDRIOB_INP_TYPE(2) | DDRIOB_TERM_EN | DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3),
+    .diff1 = DDRIOB_INP_TYPE(2) | DDRIOB_TERM_EN | DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3),
+    .ibuf_disable = false,
+    .term_disable = false,
+};
 
 const uint32_t zynq_mio_cfg[ZYNQ_MIO_CNT] = {
     [0] = MIO_IO_TYPE_LVCMOS33,
@@ -161,10 +179,41 @@ const zynq_clk_cfg_t zynq_clk_cfg = {
 
 void target_early_init(void)
 {
+    gpio_config(GPIO_LEDR, GPIO_OUTPUT);
+    gpio_set(GPIO_LEDR, 0);
 }
 
 void target_init(void)
 {
-    gem_init(GEM0_BASE, 256*1024);
+    paddr_t buf_vaddr;
+    void *hdr_addr;
+
+    /* TODO: Move into zynq_common once the init order is sorted out with gem_init needing
+     * pktbufs, and app init running after target_init */
+    if (vmm_alloc_contiguous(vmm_get_kernel_aspace(), "pktbuf_headers",
+            ZYNQ_PKTBUF_CNT * sizeof(pktbuf_buf_t), (void **)&hdr_addr, 0, 0, ARCH_MMU_FLAG_CACHED) < 0) {
+        printf("Failed to initialize pktbuf hdr slab\n");
+        return;
+    }
+
+    for (size_t i = 0; i < ZYNQ_PKTBUF_CNT; i++) {
+        pktbuf_create((void *)hdr_addr, sizeof(pktbuf_t));
+        hdr_addr += sizeof(pktbuf_t);
+    }
+
+    if (vmm_alloc_contiguous(vmm_get_kernel_aspace(), "pktbuf_buffers",
+            ZYNQ_PKTBUF_CNT * sizeof(pktbuf_buf_t), (void **)&buf_vaddr, 0, 0, ARCH_MMU_FLAG_UNCACHED) < 0) {
+        printf("Failed to initialize pktbuf vm slab\n");
+        return;
+    }
+
+    pktbuf_create_bufs((void *)buf_vaddr, ZYNQ_PKTBUF_CNT * sizeof(pktbuf_buf_t));
+    gem_init(GEM0_BASE);
+}
+
+void target_set_debug_led(unsigned int led, bool on)
+{
+    if (led == 0)
+        gpio_set(GPIO_LEDR, on);
 }
 

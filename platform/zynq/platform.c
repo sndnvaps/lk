@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Travis Geiselbrecht
+ * Copyright (c) 2012-2015 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -23,6 +23,7 @@
 #include <err.h>
 #include <debug.h>
 #include <stdio.h>
+#include <string.h>
 #include <arch/arm/mmu.h>
 #include <kernel/vm.h>
 #include <dev/uart.h>
@@ -35,6 +36,10 @@
 #include <platform/timer.h>
 #include "platform_p.h"
 
+#if ZYNQ_SDRAM_INIT
+STATIC_ASSERT(SDRAM_SIZE != 0);
+#endif
+
 /* target can specify this as the initial jam table to set up the soc */
 __WEAK void ps7_init(void) { }
 
@@ -44,6 +49,7 @@ extern const long zynq_ddr_cfg[];
 extern const uint32_t zynq_ddr_cfg_cnt;
 extern const zynq_pll_cfg_tree_t zynq_pll_cfg;
 extern const zynq_clk_cfg_t zynq_clk_cfg;
+extern const zynq_ddriob_cfg_t zynq_ddriob_cfg;
 
 
 static inline int reg_poll(uint32_t addr,uint32_t mask)
@@ -65,7 +71,6 @@ static inline int reg_poll(uint32_t addr,uint32_t mask)
 int zynq_pll_init(void) {
     const zynq_pll_cfg_tree_t *cfg = &zynq_pll_cfg;
 
-    zynq_slcr_unlock();
     SLCR_REG(ARM_PLL_CFG)  = PLL_CFG_LOCK_CNT(cfg->arm.lock_cnt) | PLL_CFG_PLL_CP(cfg->arm.cp) |
                                 PLL_CFG_PLL_RES(cfg->arm.res);
     SLCR_REG(ARM_PLL_CTRL) = PLL_FDIV(cfg->arm.fdiv) | PLL_BYPASS_FORCE | PLL_RESET;
@@ -90,6 +95,10 @@ int zynq_pll_init(void) {
 
     SLCR_REG(DDR_PLL_CTRL) &= ~PLL_BYPASS_FORCE;
     SLCR_REG(DDR_CLK_CTRL) = zynq_clk_cfg.ddr_clk;
+#elif SDRAM_SIZE == 0
+    /* if we're not using sdram and haven't been told to initialize sdram, stop the DDR pll */
+    SLCR_REG(DDR_CLK_CTRL) = 0;
+    SLCR_REG(DDR_PLL_CTRL) |= PLL_PWRDOWN;
 #endif
     SLCR_REG(IO_PLL_CFG)  = PLL_CFG_LOCK_CNT(cfg->io.lock_cnt) | PLL_CFG_PLL_CP(cfg->io.cp) |
                                 PLL_CFG_PLL_RES(cfg->io.res);
@@ -101,30 +110,63 @@ int zynq_pll_init(void) {
     }
 
     SLCR_REG(IO_PLL_CTRL) &= ~PLL_BYPASS_FORCE;
-    zynq_slcr_lock();
     return 0;
 }
 
 int zynq_mio_init(void)
 {
-    zynq_slcr_unlock();
 
     /* This DDRIOB configuration applies to both zybo and uzed, but it's possible
      * it may not work for all boards in the future. Just something to keep in mind
      * with different memory configurations.
      */
-#if ZYNQ_SDRAM_INIT
     SLCR_REG(GPIOB_CTRL) = GPIOB_CTRL_VREF_EN;
-    SLCR_REG(DDRIOB_ADDR0) = DDRIOB_OUTPUT_EN(0x3);
-    SLCR_REG(DDRIOB_ADDR1) = DDRIOB_OUTPUT_EN(0x3);
-    SLCR_REG(DDRIOB_DATA0) = DDRIOB_INP_TYPE(1) | DDRIOB_TERM_EN |
-                                DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3);
-    SLCR_REG(DDRIOB_DATA1) = DDRIOB_INP_TYPE(1) | DDRIOB_TERM_EN |
-                                DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3);
-    SLCR_REG(DDRIOB_DIFF0) = DDRIOB_INP_TYPE(2) | DDRIOB_TERM_EN |
-                                DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3);
-    SLCR_REG(DDRIOB_DIFF1) = DDRIOB_INP_TYPE(2) | DDRIOB_TERM_EN |
-                                DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3);
+
+    for (size_t pin = 0; pin < countof(zynq_mio_cfg); pin++) {
+        if (zynq_mio_cfg[pin] != MIO_DEFAULT) {
+            SLCR_REG(MIO_PIN_00 + (pin * 4)) = zynq_mio_cfg[pin];
+        }
+    }
+
+    SLCR_REG(SD0_WP_CD_SEL) = SDIO0_WP_SEL(0x37) | SDIO0_CD_SEL(0x2F);
+
+    return 0;
+}
+
+void zynq_clk_init(void)
+{
+    SLCR_REG(DCI_CLK_CTRL)   = zynq_clk_cfg.dci_clk;
+    SLCR_REG(GEM0_CLK_CTRL)  = zynq_clk_cfg.gem0_clk;
+    SLCR_REG(GEM0_RCLK_CTRL) = zynq_clk_cfg.gem0_rclk;
+    SLCR_REG(GEM1_CLK_CTRL)  = zynq_clk_cfg.gem1_clk;
+    SLCR_REG(GEM1_RCLK_CTRL) = zynq_clk_cfg.gem1_rclk;
+    SLCR_REG(SMC_CLK_CTRL)   = zynq_clk_cfg.smc_clk;
+    SLCR_REG(LQSPI_CLK_CTRL) = zynq_clk_cfg.lqspi_clk;
+    SLCR_REG(SDIO_CLK_CTRL)  = zynq_clk_cfg.sdio_clk;
+    SLCR_REG(UART_CLK_CTRL)  = zynq_clk_cfg.uart_clk;
+    SLCR_REG(SPI_CLK_CTRL)   = zynq_clk_cfg.spi_clk;
+    SLCR_REG(CAN_CLK_CTRL)   = zynq_clk_cfg.can_clk;
+    SLCR_REG(CAN_MIOCLK_CTRL)= zynq_clk_cfg.can_mioclk;
+    SLCR_REG(USB0_CLK_CTRL)  = zynq_clk_cfg.usb0_clk;
+    SLCR_REG(USB1_CLK_CTRL)  = zynq_clk_cfg.usb1_clk;
+    SLCR_REG(PCAP_CLK_CTRL)  = zynq_clk_cfg.pcap_clk;
+    SLCR_REG(FPGA0_CLK_CTRL) = zynq_clk_cfg.fpga0_clk;
+    SLCR_REG(FPGA1_CLK_CTRL) = zynq_clk_cfg.fpga1_clk;
+    SLCR_REG(FPGA2_CLK_CTRL) = zynq_clk_cfg.fpga2_clk;
+    SLCR_REG(FPGA3_CLK_CTRL) = zynq_clk_cfg.fpga3_clk;
+    SLCR_REG(APER_CLK_CTRL)  = zynq_clk_cfg.aper_clk;
+    SLCR_REG(CLK_621_TRUE)   = zynq_clk_cfg.clk_621_true;
+}
+
+#if ZYNQ_SDRAM_INIT
+void zynq_ddr_init(void)
+{
+    SLCR_REG(DDRIOB_ADDR0) = zynq_ddriob_cfg.addr0;
+    SLCR_REG(DDRIOB_ADDR1) = zynq_ddriob_cfg.addr1;
+    SLCR_REG(DDRIOB_DATA0) = zynq_ddriob_cfg.data0;
+    SLCR_REG(DDRIOB_DATA1) = zynq_ddriob_cfg.data1;
+    SLCR_REG(DDRIOB_DIFF0) = zynq_ddriob_cfg.diff0;
+    SLCR_REG(DDRIOB_DIFF1) = zynq_ddriob_cfg.diff1;
     SLCR_REG(DDRIOB_CLOCK) = DDRIOB_OUTPUT_EN(0x3);
 
     /* These register fields are not documented in the TRM. These
@@ -138,44 +180,6 @@ int zynq_mio_init(void)
     SLCR_REG(DDRIOB_DCI_CTRL) = 0x00000001U;
     SLCR_REG(DDRIOB_DCI_CTRL) |= 0x00000020U;
     SLCR_REG(DDRIOB_DCI_CTRL) |= 0x00000823U;
-#endif
-
-    for (size_t pin = 0; pin < countof(zynq_mio_cfg); pin++) {
-        if (zynq_mio_cfg[pin] != 0) {
-            SLCR_REG(MIO_PIN_00 + (pin * sizeof(uint32_t))) = zynq_mio_cfg[pin];
-        }
-    }
-
-    SLCR_REG(SD0_WP_CD_SEL) = SDIO0_WP_SEL(0x37) | SDIO0_CD_SEL(0x2F);
-    zynq_slcr_lock();
-
-    return 0;
-}
-
-void zynq_clk_init(void)
-{
-    zynq_slcr_unlock();
-    SLCR_REG(DCI_CLK_CTRL)   = zynq_clk_cfg.dci_clk;
-    SLCR_REG(GEM0_CLK_CTRL)  = zynq_clk_cfg.gem0_clk;
-    SLCR_REG(GEM0_RCLK_CTRL) = zynq_clk_cfg.gem0_rclk;
-    SLCR_REG(GEM1_CLK_CTRL)  = zynq_clk_cfg.gem1_clk;
-    SLCR_REG(GEM1_RCLK_CTRL) = zynq_clk_cfg.gem1_rclk;
-    SLCR_REG(LQSPI_CLK_CTRL) = zynq_clk_cfg.lqspi_clk;
-    SLCR_REG(SDIO_CLK_CTRL)  = zynq_clk_cfg.sdio_clk;
-    SLCR_REG(UART_CLK_CTRL)  = zynq_clk_cfg.uart_clk;
-    SLCR_REG(PCAP_CLK_CTRL)  = zynq_clk_cfg.pcap_clk;
-    SLCR_REG(FPGA0_CLK_CTRL) = zynq_clk_cfg.fpga0_clk;
-    SLCR_REG(FPGA1_CLK_CTRL) = zynq_clk_cfg.fpga1_clk;
-    SLCR_REG(FPGA2_CLK_CTRL) = zynq_clk_cfg.fpga2_clk;
-    SLCR_REG(FPGA3_CLK_CTRL) = zynq_clk_cfg.fpga3_clk;
-    SLCR_REG(APER_CLK_CTRL)  = zynq_clk_cfg.aper_clk;
-    SLCR_REG(CLK_621_TRUE)   = zynq_clk_cfg.clk_621_true;
-    zynq_slcr_lock();
-}
-
-void zynq_ddr_init(void)
-{
-    zynq_slcr_unlock();
 
     /* Write addresss / value pairs from target table */
     for (size_t i = 0; i < zynq_ddr_cfg_cnt; i += 2) {
@@ -192,8 +196,21 @@ void zynq_ddr_init(void)
     /* Switch timer to 64k */
     *REG32(0XF8007000) = *REG32(0xF8007000) & ~0x20000000U;
 
-    zynq_slcr_lock();
+    if (zynq_ddriob_cfg.ibuf_disable) {
+        SLCR_REG(DDRIOB_DATA0) |= DDRIOB_IBUF_DISABLE_MODE;
+        SLCR_REG(DDRIOB_DATA1) |= DDRIOB_IBUF_DISABLE_MODE;
+        SLCR_REG(DDRIOB_DIFF0) |= DDRIOB_IBUF_DISABLE_MODE;
+        SLCR_REG(DDRIOB_DIFF1) |= DDRIOB_IBUF_DISABLE_MODE;
+    }
+
+    if (zynq_ddriob_cfg.term_disable) {
+        SLCR_REG(DDRIOB_DATA0) |= DDRIOB_TERM_DISABLE_MODE;
+        SLCR_REG(DDRIOB_DATA1) |= DDRIOB_TERM_DISABLE_MODE;
+        SLCR_REG(DDRIOB_DIFF0) |= DDRIOB_TERM_DISABLE_MODE;
+        SLCR_REG(DDRIOB_DIFF1) |= DDRIOB_TERM_DISABLE_MODE;
+    }
 }
+#endif
 
 STATIC_ASSERT(IS_ALIGNED(SDRAM_BASE, MB));
 STATIC_ASSERT(IS_ALIGNED(SDRAM_SIZE, MB));
@@ -288,14 +305,18 @@ void platform_init_mmu_mappings(void)
 
 void platform_early_init(void)
 {
+#if 0
+    ps7_init();
+#else
+    /* Unlock the registers and leave them that way */
+    zynq_slcr_unlock();
     zynq_mio_init();
     zynq_pll_init();
     zynq_clk_init();
 #if ZYNQ_SDRAM_INIT
     zynq_ddr_init();
 #endif
-
-    zynq_slcr_unlock();
+#endif
 
     /* Enable all level shifters */
     SLCR_REG(LVL_SHFTR_EN) = 0xF;
@@ -305,16 +326,54 @@ void platform_early_init(void)
     /* zynq manual says this is mandatory for cache init */
     *REG32(SLCR_BASE + 0xa1c) = 0x020202;
 
-    zynq_slcr_lock();
-
     /* early initialize the uart so we can printf */
     uart_init_early();
 
     /* initialize the interrupt controller */
     arm_gic_init();
+    zynq_gpio_init();
 
     /* initialize the timer block */
     arm_cortex_a9_timer_init(CPUPRIV_BASE, zynq_get_arm_timer_freq());
+
+    /* bump the 2nd cpu into our code space and remap the top SRAM block */
+    if (KERNEL_LOAD_OFFSET != 0) {
+        /* construct a trampoline to get the 2nd cpu up to the trap routine */
+
+        /* figure out the offset of the trampoline routine in physical space from address 0 */
+        extern void platform_reset(void);
+        addr_t tramp = (addr_t)&platform_reset;
+        tramp -= KERNEL_BASE;
+        tramp += MEMBASE;
+
+        /* stuff in a ldr pc, [nextaddrress], and a target address */
+        uint32_t *ptr = (uint32_t *)KERNEL_BASE;
+
+        ptr[0] = 0xe51ff004; // ldr pc, [pc, #-4]
+        ptr[1] = tramp;
+        arch_clean_invalidate_cache_range((addr_t)ptr, 8);
+    }
+
+    /* reset the 2nd cpu, letting it go through its reset vector (at 0x0 physical) */
+    SLCR_REG(A9_CPU_RST_CTRL) |= (1<<1); // reset cpu 1
+    spin(10);
+    SLCR_REG(A9_CPU_RST_CTRL) &= ~(1<<1); // unreset cpu 1
+
+    /* wait for the 2nd cpu to reset, go through the usual reset vector, and get trapped by our code */
+    /* see platform/zynq/reset.S */
+    extern volatile int __cpu_trapped;
+    uint count = 100000;
+    while (--count) {
+        arch_clean_invalidate_cache_range((addr_t)&__cpu_trapped, sizeof(__cpu_trapped));
+        if (__cpu_trapped != 0)
+            break;
+    }
+    if (count == 0) {
+        panic("ZYNQ: failed to trap 2nd cpu\n");
+    }
+
+    /* bounce the 4th sram region down to lower address */
+    SLCR_REG(OCM_CFG) &= ~0xf; /* all banks at low address */
 
     /* add the main memory arena */
 #if !ZYNQ_CODE_IN_SDRAM && SDRAM_SIZE != 0
@@ -351,26 +410,67 @@ void platform_init(void)
 
 void platform_quiesce(void)
 {
+#if ZYNQ_WITH_GEM_ETH
     gem_disable();
+#endif
 
     platform_stop_timer();
+
+    /* stop the 2nd cpu and hold in reset */
+    SLCR_REG(A9_CPU_RST_CTRL) |= (1<<1); // reset cpu 1
 }
 
 #if WITH_LIB_CONSOLE
-static int cmd_mio(int argc, const cmd_args *argv)
+static int cmd_zynq(int argc, const cmd_args *argv)
 {
-    printf("zynq mio:\n");
-    for (size_t i = 0; i < ZYNQ_MIO_CNT; i++) {
-        printf("\t%02u: 0x%08x", i, *REG32((uintptr_t)&SLCR->MIO_PIN_00 + (i * 4)));
-        if (i % 4 == 3 || i == 53) {
-            putchar('\n');
+    if (argc < 2) {
+notenoughargs:
+        printf("not enough arguments\n");
+usage:
+        printf("usage: %s <command>\n", argv[0].str);
+        printf("\tslcr lock\n");
+        printf("\tslcr unlock\n");
+        printf("\tslcr lockstatus\n");
+        printf("\tmio\n");
+        printf("\tclocks\n");
+        return -1;
+    }
+
+    if (!strcmp(argv[1].str, "slcr")) {
+        if (argc < 3) goto notenoughargs;
+
+        bool print_lock_status = false;
+        if (!strcmp(argv[2].str, "lock")) {
+            zynq_slcr_lock();
+            print_lock_status = true;
+        } else if (!strcmp(argv[2].str, "unlock")) {
+            zynq_slcr_unlock();
+            print_lock_status = true;
+        } else if (print_lock_status || !strcmp(argv[2].str, "lockstatus")) {
+            printf("%s\n", (SLCR->SLCR_LOCKSTA & 0x1) ? "locked" : "unlocked");
+        } else {
+            goto usage;
         }
+    } else if (!strcmp(argv[1].str, "mio")) {
+        printf("zynq mio:\n");
+        for (size_t i = 0; i < ZYNQ_MIO_CNT; i++) {
+            printf("\t%02u: 0x%08x", i, *REG32((uintptr_t)&SLCR->MIO_PIN_00 + (i * 4)));
+            if (i % 4 == 3 || i == 53) {
+                putchar('\n');
+            }
+        }
+    } else if (!strcmp(argv[1].str, "clocks")) {
+        zynq_dump_clocks();
+    } else {
+        goto usage;
     }
 
     return 0;
 }
 
 STATIC_COMMAND_START
-STATIC_COMMAND("mio", "print mio configuration", &cmd_mio)
-STATIC_COMMAND_END(mio);
+#if LK_DEBUGLEVEL > 1
+STATIC_COMMAND("zynq", "zynq configuration commands", &cmd_zynq)
 #endif
+STATIC_COMMAND_END(zynq);
+#endif // WITH_LIB_CONSOLE

@@ -104,12 +104,23 @@ void *paddr_to_kvaddr(paddr_t pa)
     while (map->size > 0) {
         if (!(map->flags & MMU_INITIAL_MAPPING_TEMPORARY) &&
             pa >= map->phys &&
-            pa <= map->phys + map->size) {
+            pa <= map->phys + map->size - 1) {
             return (void *)(map->virt + (pa - map->phys));
         }
         map++;
     }
     return NULL;
+}
+
+paddr_t kvaddr_to_paddr(void *ptr)
+{
+    status_t rc;
+    paddr_t  pa;
+
+    rc = arch_mmu_query((vaddr_t)ptr, &pa, NULL);
+    if (rc)
+        return (paddr_t) NULL;
+    return pa;
 }
 
 static int cmd_vm(int argc, const cmd_args *argv)

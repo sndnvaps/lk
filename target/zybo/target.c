@@ -22,8 +22,17 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <stdio.h>
+#include <dev/gpio.h>
+#include <lib/pktbuf.h>
+#include <kernel/vm.h>
 #include <platform/zynq.h>
 #include <platform/gem.h>
+#include <platform/gpio.h>
+#include <platform/interrupts.h>
+#include <target/gpioconfig.h>
+
+#define ZYNQ_PKTBUF_CNT 128
 
 zynq_pll_cfg_tree_t zynq_pll_cfg = {
     .arm = {
@@ -77,15 +86,36 @@ const unsigned long zynq_ddr_cfg[] = {
 
 const unsigned long zynq_ddr_cfg_cnt = countof(zynq_ddr_cfg);
 
+const zynq_ddriob_cfg_t zynq_ddriob_cfg = {
+    .addr0 = DDRIOB_OUTPUT_EN(0x3),
+    .addr1 = DDRIOB_OUTPUT_EN(0x3),
+    .data0 = DDRIOB_INP_TYPE(1) | DDRIOB_TERM_EN | DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3),
+    .data1 = DDRIOB_INP_TYPE(1) | DDRIOB_TERM_EN | DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3),
+    .diff0 = DDRIOB_INP_TYPE(2) | DDRIOB_TERM_EN | DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3),
+    .diff1 = DDRIOB_INP_TYPE(2) | DDRIOB_TERM_EN | DDRIOB_DCI_TYPE(0x3) | DDRIOB_OUTPUT_EN(0x3),
+    .ibuf_disable = false,
+    .term_disable = false,
+};
+
 const uint32_t zynq_mio_cfg[ZYNQ_MIO_CNT] = {
+    [0] = MIO_DEFAULT,
     [1] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
     [2] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
     [3] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
     [4] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
     [5] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
     [6] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
+    // LED4
+    [7] = MIO_GPIO,
     [8] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
     // 16-21 gem0
+    [9] = MIO_DEFAULT,
+    [10] = MIO_DEFAULT,
+    [11] = MIO_DEFAULT,
+    [12] = MIO_DEFAULT,
+    [13] = MIO_DEFAULT,
+    [14] = MIO_DEFAULT,
+    [15] = MIO_DEFAULT,
     [16] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_HSTL | MIO_PULLUP | MIO_DISABLE_RCVR,
     [17] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_HSTL | MIO_PULLUP | MIO_DISABLE_RCVR,
     [18] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_HSTL | MIO_PULLUP | MIO_DISABLE_RCVR,
@@ -120,6 +150,9 @@ const uint32_t zynq_mio_cfg[ZYNQ_MIO_CNT] = {
     [47] = MIO_TRI_ENABLE | MIO_IO_TYPE_LVCMOS18,
     [48] = MIO_L3_SEL(0x7) | MIO_IO_TYPE_LVCMOS18,
     [49] = MIO_TRI_ENABLE | MIO_L3_SEL(0x7) | MIO_IO_TYPE_LVCMOS18,
+    // 50-51 are BTN4 and BTN5
+    [50] = MIO_GPIO,
+    [51] = MIO_GPIO,
     // 52-53 gem0
     [52] = MIO_L3_SEL(0x4) | MIO_IO_TYPE_LVCMOS18 | MIO_PULLUP,
     [53] = MIO_L3_SEL(0x4) | MIO_IO_TYPE_LVCMOS18 | MIO_PULLUP,
@@ -151,9 +184,54 @@ const zynq_clk_cfg_t zynq_clk_cfg = {
 
 void target_early_init(void)
 {
+    gpio_config(GPIO_LEDY, GPIO_OUTPUT);
+    gpio_set(GPIO_LEDY, 0);
 }
 
+static enum handler_return toggle_ledy(void *arg) {
+    static bool on = false;
+
+    gpio_set(GPIO_LEDY, on);
+    on = !on;
+
+    return INT_NO_RESCHEDULE;
+}
+
+void target_set_debug_led(unsigned int led, bool on)
+{
+    if (led == 0) {
+        gpio_set(GPIO_LEDY, on);
+    }
+}
 void target_init(void)
 {
-    gem_init(GEM0_BASE, 256*1024);
+    paddr_t buf_vaddr;
+    void *hdr_addr;
+
+    /* TODO: Move into zynq_common once the init order is sorted out with gem_init needing
+     * pktbufs, and app init running after target_init */
+    if (vmm_alloc_contiguous(vmm_get_kernel_aspace(), "pktbuf_headers",
+            ZYNQ_PKTBUF_CNT * sizeof(pktbuf_buf_t), (void **)&hdr_addr, 0, 0, ARCH_MMU_FLAG_CACHED) < 0) {
+        printf("Failed to initialize pktbuf hdr slab\n");
+        return;
+    }
+
+    for (size_t i = 0; i < ZYNQ_PKTBUF_CNT; i++) {
+        pktbuf_create((void *)hdr_addr, sizeof(pktbuf_t));
+        hdr_addr += sizeof(pktbuf_t);
+    }
+
+    if (vmm_alloc_contiguous(vmm_get_kernel_aspace(), "pktbuf_buffers",
+            ZYNQ_PKTBUF_CNT * sizeof(pktbuf_buf_t), (void **)&buf_vaddr, 0, 0, ARCH_MMU_FLAG_UNCACHED) < 0) {
+        printf("Failed to initialize pktbuf vm slab\n");
+        return;
+    }
+
+    pktbuf_create_bufs((void *)buf_vaddr, ZYNQ_PKTBUF_CNT * sizeof(pktbuf_buf_t));
+    gem_init(GEM0_BASE);
+
+    register_gpio_int_handler(ZYBO_BTN5, toggle_ledy, NULL);
+    zynq_unmask_gpio_interrupt(ZYBO_BTN5);
 }
+
+

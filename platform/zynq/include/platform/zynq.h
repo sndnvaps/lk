@@ -28,11 +28,7 @@
 #include <bits.h>
 #endif
 
-#ifdef ZYNQ_CLG225
-#define ZYNQ_MIO_CNT    32
-#else
 #define ZYNQ_MIO_CNT    54
-#endif
 
 /* memory addresses */
 /* assumes sram is mapped at 0 the first MB of sdram is covered by it */
@@ -40,7 +36,7 @@
 #define SDRAM_APERTURE_SIZE (0x3ff00000)
 #define SRAM_BASE           (0x0)
 #define SRAM_APERTURE_SIZE  (0x00040000)
-#define SRAM_SIZE           (0x00030000) /* only 192KB mapped currently */
+#define SRAM_SIZE           (0x00040000)
 
 /* hardware base addresses */
 #define UART0_BASE (0xe0000000)
@@ -76,6 +72,8 @@
 #define PRIV_TIMER_BASE   (CPUPRIV_BASE + 0x0600)
 #define GIC_DISTRIB_BASE  (CPUPRIV_BASE + 0x1000)
 #define L2CACHE_BASE      (CPUPRIV_BASE + 0x2000)
+
+#define QSPI_LINEAR_BASE  (0xfc000000)
 
 /* interrupts */
 #define TTC0_A_INT    42
@@ -119,6 +117,7 @@
 
 #ifndef ASSEMBLY
 
+/* Configuration values for each of the system PLLs. Refer to the TRM 25.10.4 */
 typedef struct {
     uint32_t lock_cnt;
     uint32_t cp;
@@ -134,9 +133,15 @@ typedef struct {
     uint32_t gem0_rclk;
     uint32_t gem1_clk;
     uint32_t gem1_rclk;
+    uint32_t smc_clk;
     uint32_t lqspi_clk;
     uint32_t sdio_clk;
     uint32_t uart_clk;
+    uint32_t spi_clk;
+    uint32_t can_clk;
+    uint32_t can_mioclk;
+    uint32_t usb0_clk;
+    uint32_t usb1_clk;
     uint32_t pcap_clk;
     uint32_t fpga0_clk;
     uint32_t fpga1_clk;
@@ -151,6 +156,18 @@ typedef struct {
     zynq_pll_cfg_t ddr;
     zynq_pll_cfg_t io;
 } zynq_pll_cfg_tree_t;
+
+/* Configuration for the DDR controller and buffers. TRM Ch 10 */
+typedef struct {
+    uint32_t addr0;
+    uint32_t addr1;
+    uint32_t data0;
+    uint32_t data1;
+    uint32_t diff0;
+    uint32_t diff1;
+    bool ibuf_disable;
+    bool term_disable;
+} zynq_ddriob_cfg_t;;
 
 /* SLCR registers */
 struct slcr_regs {
@@ -459,6 +476,8 @@ STATIC_ASSERT(offsetof(struct slcr_regs, DDRIOB_DCI_STATUS) == 0xb74);
 #define MIO_IO_TYPE_HSTL                (0x4 << 9)
 #define MIO_PULLUP                      (1 << 12)
 #define MIO_DISABLE_RCVR                (1 << 13)
+#define MIO_GPIO                        (MIO_IO_TYPE_LVCMOS18 | MIO_DISABLE_RCVR)
+#define MIO_DEFAULT                     (0xFFFF0000)
 
 /* UART registers */
 #define UART_CR                         (0x00)
