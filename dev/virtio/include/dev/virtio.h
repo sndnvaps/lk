@@ -23,6 +23,7 @@
 #pragma once
 
 #include <compiler.h>
+#include <assert.h>
 #include <list.h>
 #include <sys/types.h>
 #include <dev/virtio/virtio_ring.h>
@@ -47,10 +48,16 @@ struct virtio_device {
     void *priv; /* a place for the driver to put private data */
 
     enum handler_return (*irq_driver_callback)(struct virtio_device *dev, uint ring, const struct vring_used_elem *e);
+    enum handler_return (*config_change_callback)(struct virtio_device *dev);
 
     /* virtio rings */
+    uint32_t active_rings_bitmap;
     struct vring ring[MAX_VIRTIO_RINGS];
 };
+
+void virtio_reset_device(struct virtio_device *dev);
+void virtio_status_acknowledge_driver(struct virtio_device *dev);
+void virtio_status_driver_ok(struct virtio_device *dev);
 
 /* api used by devices to interact with the virtio bus */
 status_t virtio_alloc_ring(struct virtio_device *dev, uint index, uint16_t len) __NONNULL();
@@ -66,6 +73,7 @@ struct vring_desc *virtio_alloc_desc_chain(struct virtio_device *dev, uint ring_
 
 static inline struct vring_desc *virtio_desc_index_to_desc(struct virtio_device *dev, uint ring_index, uint16_t desc_index)
 {
+    DEBUG_ASSERT(desc_index != 0xffff);
     return &dev->ring[ring_index].desc[desc_index];
 }
 
@@ -75,4 +83,5 @@ void virtio_dump_desc(const struct vring_desc *desc);
 void virtio_submit_chain(struct virtio_device *dev, uint ring_index, uint16_t desc_index);
 
 void virtio_kick(struct virtio_device *dev, uint ring_idnex);
+
 

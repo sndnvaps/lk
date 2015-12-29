@@ -39,6 +39,9 @@ endif
 MODULE_SRCDIR := $(MODULE)
 MODULE_BUILDDIR := $(call TOBUILDDIR,$(MODULE_SRCDIR))
 
+# add a local include dir to the global include path
+GLOBAL_INCLUDES += $(MODULE_SRCDIR)/include
+
 # add the listed module deps to the global list
 MODULES += $(MODULE_DEPS)
 
@@ -85,6 +88,9 @@ $(MODULE_OBJECT): $(MODULE_OBJS) $(MODULE_EXTRA_OBJS)
 	@$(MKDIR)
 	@echo linking $@
 	$(NOECHO)$(LD) $(GLOBAL_MODULE_LDFLAGS) -r $^ -o $@
+
+# track all of the source files compiled
+ALLSRCS += $(MODULE_SRCS)
 
 # track all the objects built
 ALLOBJS += $(MODULE_OBJS)

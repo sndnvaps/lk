@@ -32,8 +32,6 @@
 #include <platform/interrupts.h>
 #include <target/gpioconfig.h>
 
-#define ZYNQ_PKTBUF_CNT 128
-
 zynq_pll_cfg_tree_t zynq_pll_cfg = {
     .arm = {
         .lock_cnt = 375,
@@ -106,7 +104,7 @@ const uint32_t zynq_mio_cfg[ZYNQ_MIO_CNT] = {
     [5] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
     [6] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
     // LED4
-    [7] = MIO_GPIO,
+    [7] = MIO_IO_TYPE_LVCMOS18 | MIO_DISABLE_RCVR,
     [8] = MIO_L0_SEL | MIO_SPEED_FAST | MIO_IO_TYPE_LVCMOS33,
     // 16-21 gem0
     [9] = MIO_DEFAULT,
@@ -151,8 +149,8 @@ const uint32_t zynq_mio_cfg[ZYNQ_MIO_CNT] = {
     [48] = MIO_L3_SEL(0x7) | MIO_IO_TYPE_LVCMOS18,
     [49] = MIO_TRI_ENABLE | MIO_L3_SEL(0x7) | MIO_IO_TYPE_LVCMOS18,
     // 50-51 are BTN4 and BTN5
-    [50] = MIO_GPIO,
-    [51] = MIO_GPIO,
+    [50] = MIO_IO_TYPE_LVCMOS18 | MIO_DISABLE_RCVR,
+    [51] = MIO_IO_TYPE_LVCMOS18 | MIO_DISABLE_RCVR,
     // 52-53 gem0
     [52] = MIO_L3_SEL(0x4) | MIO_IO_TYPE_LVCMOS18 | MIO_PULLUP,
     [53] = MIO_L3_SEL(0x4) | MIO_IO_TYPE_LVCMOS18 | MIO_PULLUP,
@@ -205,29 +203,6 @@ void target_set_debug_led(unsigned int led, bool on)
 }
 void target_init(void)
 {
-    paddr_t buf_vaddr;
-    void *hdr_addr;
-
-    /* TODO: Move into zynq_common once the init order is sorted out with gem_init needing
-     * pktbufs, and app init running after target_init */
-    if (vmm_alloc_contiguous(vmm_get_kernel_aspace(), "pktbuf_headers",
-            ZYNQ_PKTBUF_CNT * sizeof(pktbuf_buf_t), (void **)&hdr_addr, 0, 0, ARCH_MMU_FLAG_CACHED) < 0) {
-        printf("Failed to initialize pktbuf hdr slab\n");
-        return;
-    }
-
-    for (size_t i = 0; i < ZYNQ_PKTBUF_CNT; i++) {
-        pktbuf_create((void *)hdr_addr, sizeof(pktbuf_t));
-        hdr_addr += sizeof(pktbuf_t);
-    }
-
-    if (vmm_alloc_contiguous(vmm_get_kernel_aspace(), "pktbuf_buffers",
-            ZYNQ_PKTBUF_CNT * sizeof(pktbuf_buf_t), (void **)&buf_vaddr, 0, 0, ARCH_MMU_FLAG_UNCACHED) < 0) {
-        printf("Failed to initialize pktbuf vm slab\n");
-        return;
-    }
-
-    pktbuf_create_bufs((void *)buf_vaddr, ZYNQ_PKTBUF_CNT * sizeof(pktbuf_buf_t));
     gem_init(GEM0_BASE);
 
     register_gpio_int_handler(ZYBO_BTN5, toggle_ledy, NULL);

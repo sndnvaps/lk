@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2012 Travis Geiselbrecht
+ * Copyright (c) 2008-2014 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -29,6 +29,8 @@
 #include <arch/defines.h>
 #include <arch/ops.h>
 #include <arch/thread.h>
+
+__BEGIN_CDECLS;
 
 /* wait queue stuff */
 #define WAIT_QUEUE_MAGIC 'wait'
@@ -78,6 +80,8 @@ int wait_queue_wake_all(wait_queue_t *, bool reschedule, status_t wait_queue_err
  * return an error if the thread is not currently blocked (or is the current thread)
  */
 status_t thread_unblock_from_wait_queue(struct thread *t, status_t wait_queue_error);
+
+__END_CDECLS;
 
 #endif
 

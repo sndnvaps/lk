@@ -5,8 +5,10 @@ MODULE := $(LOCAL_DIR)
 MODULE_SRCS += \
 	$(LOCAL_DIR)/inetsrv.c \
 
+
 MODULE_DEPS := \
     lib/cksum \
     lib/minip \
+    lib/tftp  \
 
 include make/module.mk

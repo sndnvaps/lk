@@ -22,10 +22,26 @@
  */
 #pragma once
 
+/* some assembly #defines, need to match the structure below */
+#if IS_64BIT
+#define __MMU_INITIAL_MAPPING_PHYS_OFFSET 0
+#define __MMU_INITIAL_MAPPING_VIRT_OFFSET 8
+#define __MMU_INITIAL_MAPPING_SIZE_OFFSET 16
+#define __MMU_INITIAL_MAPPING_FLAGS_OFFSET 24
+#define __MMU_INITIAL_MAPPING_SIZE        40
+#else
+#define __MMU_INITIAL_MAPPING_PHYS_OFFSET 0
+#define __MMU_INITIAL_MAPPING_VIRT_OFFSET 4
+#define __MMU_INITIAL_MAPPING_SIZE_OFFSET 8
+#define __MMU_INITIAL_MAPPING_FLAGS_OFFSET 12
+#define __MMU_INITIAL_MAPPING_SIZE        20
+#endif
+
 /* flags for initial mapping struct */
 #define MMU_INITIAL_MAPPING_TEMPORARY     (0x1)
 #define MMU_INITIAL_MAPPING_FLAG_UNCACHED (0x2)
 #define MMU_INITIAL_MAPPING_FLAG_DEVICE   (0x4)
+#define MMU_INITIAL_MAPPING_FLAG_DYNAMIC  (0x8)  /* entry has to be patched up by platform_reset */
 
 #ifndef ASSEMBLY
 
@@ -49,6 +65,13 @@ struct mmu_initial_mapping {
     unsigned int flags;
     const char *name;
 };
+
+/* Assert that the assembly macros above match this struct. */
+STATIC_ASSERT(__offsetof(struct mmu_initial_mapping, phys) == __MMU_INITIAL_MAPPING_PHYS_OFFSET);
+STATIC_ASSERT(__offsetof(struct mmu_initial_mapping, virt) == __MMU_INITIAL_MAPPING_VIRT_OFFSET);
+STATIC_ASSERT(__offsetof(struct mmu_initial_mapping, size) == __MMU_INITIAL_MAPPING_SIZE_OFFSET);
+STATIC_ASSERT(__offsetof(struct mmu_initial_mapping, flags) == __MMU_INITIAL_MAPPING_FLAGS_OFFSET);
+STATIC_ASSERT(sizeof(struct mmu_initial_mapping) == __MMU_INITIAL_MAPPING_SIZE);
 
 /* Platform or target must fill out one of these to set up the initial memory map
  * for kernel and enough IO space to boot.
@@ -77,8 +100,24 @@ STATIC_ASSERT(KERNEL_ASPACE_BASE + (KERNEL_ASPACE_SIZE - 1) > KERNEL_ASPACE_BASE
 
 static inline bool is_kernel_address(vaddr_t va)
 {
-    return (va >= KERNEL_ASPACE_BASE && va <= (KERNEL_ASPACE_BASE + KERNEL_ASPACE_SIZE));
+    return (va >= KERNEL_ASPACE_BASE && va <= (KERNEL_ASPACE_BASE + KERNEL_ASPACE_SIZE - 1));
 }
+
+/* user address space, defaults to below kernel space with a 16MB guard gap on either side */
+#ifndef USER_ASPACE_BASE
+#define USER_ASPACE_BASE ((vaddr_t)0x01000000UL)
+#endif
+#ifndef USER_ASPACE_SIZE
+#define USER_ASPACE_SIZE ((vaddr_t)KERNEL_ASPACE_BASE - USER_ASPACE_BASE - 0x01000000UL)
+#endif
+
+STATIC_ASSERT(USER_ASPACE_BASE + (USER_ASPACE_SIZE - 1) > USER_ASPACE_BASE);
+
+static inline bool is_user_address(vaddr_t va)
+{
+    return (va >= USER_ASPACE_BASE && va <= (USER_ASPACE_BASE + USER_ASPACE_SIZE - 1));
+}
+
 
 /* physical allocator */
 typedef struct pmm_arena {
@@ -106,27 +145,27 @@ status_t pmm_add_arena(pmm_arena_t *arena) __NONNULL((1));
      * The list must be initialized.
      * Returns the number of pages allocated.
      */
-uint pmm_alloc_pages(uint count, struct list_node *list) __NONNULL((2));
+size_t pmm_alloc_pages(uint count, struct list_node *list) __NONNULL((2));
 
     /* Allocate a specific range of physical pages, adding to the tail of the passed list.
      * The list must be initialized.
      * Returns the number of pages allocated.
      */
-uint pmm_alloc_range(paddr_t address, uint count, struct list_node *list) __NONNULL((3));
+size_t pmm_alloc_range(paddr_t address, uint count, struct list_node *list) __NONNULL((3));
 
     /* Free a list of physical pages.
      * Returns the number of pages freed.
      */
-uint pmm_free(struct list_node *list) __NONNULL((1));
+size_t pmm_free(struct list_node *list) __NONNULL((1));
 
     /* Helper routine for the above. */
-uint pmm_free_page(vm_page_t *page) __NONNULL((1));
+size_t pmm_free_page(vm_page_t *page) __NONNULL((1));
 
     /* Allocate a run of contiguous pages, aligned on log2 byte boundary (0-31)
      * If the optional physical address pointer is passed, return the address.
      * If the optional list is passed, append the allocate page structures to the tail of the list.
      */
-uint pmm_alloc_contiguous(uint count, uint8_t align_log2, paddr_t *pa, struct list_node *list);
+size_t pmm_alloc_contiguous(uint count, uint8_t align_log2, paddr_t *pa, struct list_node *list);
 
     /* Allocate a run of pages out of the kernel area and return the pointer in kernel space.
      * If the optional list is passed, append the allocate page structures to the tail of the list.
@@ -135,6 +174,8 @@ void *pmm_alloc_kpages(uint count, struct list_node *list);
 
     /* Helper routine for pmm_alloc_kpages. */
 static inline void *pmm_alloc_kpage(void) { return pmm_alloc_kpages(1, NULL); }
+
+size_t pmm_free_kpages(void *ptr, uint count);
 
 /* physical to virtual */
 void *paddr_to_kvaddr(paddr_t pa);
@@ -183,7 +224,7 @@ status_t vmm_reserve_space(vmm_aspace_t *aspace, const char *name, size_t size, 
 
 /* allocate a region of virtual space that maps a physical piece of address space.
    the physical pages that back this are not allocated from the pmm. */
-status_t vmm_alloc_physical(vmm_aspace_t *aspace, const char *name, size_t size, void **ptr, paddr_t paddr, uint vmm_flags, uint arch_mmu_flags)
+status_t vmm_alloc_physical(vmm_aspace_t *aspace, const char *name, size_t size, void **ptr, uint8_t align_log2, paddr_t paddr, uint vmm_flags, uint arch_mmu_flags)
     __NONNULL((1));
 
 /* allocate a region of memory backed by newly allocated contiguous physical memory  */
@@ -197,9 +238,18 @@ status_t vmm_alloc(vmm_aspace_t *aspace, const char *name, size_t size, void **p
 /* Unmap previously allocated region and free physical memory pages backing it (if any) */
 status_t vmm_free_region(vmm_aspace_t *aspace, vaddr_t va);
 
-
     /* For the above region creation routines. Allocate virtual space at the passed in pointer. */
 #define VMM_FLAG_VALLOC_SPECIFIC 0x1
+
+/* allocate a new address space */
+status_t vmm_create_aspace(vmm_aspace_t **aspace, const char *name, uint flags)
+    __NONNULL((1));
+
+/* destroy everything in the address space */
+status_t vmm_free_aspace(vmm_aspace_t *aspace)
+    __NONNULL((1));
+
+#define VMM_FLAG_ASPACE_KERNEL 0x1
 
 __END_CDECLS
 

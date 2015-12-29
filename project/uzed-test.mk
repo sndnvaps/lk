@@ -2,18 +2,15 @@
 #
 MODULES += \
 	app/inetsrv \
-	app/shell \
-	app/stringtests \
-	app/tests \
 	app/lkboot \
-	app/zynq-common \
+	app/shell \
 	dev/gpio \
-	lib/cksum \
-	lib/debugcommands \
-	lib/libm \
+	lib/klog \
+	lib/watchdog \
 
 GLOBAL_DEFINES += \
 	SYSPARAM_ALLOW_WRITE=1
 
 include project/target/uzed.mk
+include project/virtual/test.mk
 

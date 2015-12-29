@@ -27,8 +27,8 @@
 #include <stddef.h>
 #include <compiler.h>
 #include <platform/debug.h>
-
-__BEGIN_CDECLS
+#include <list.h>
+#include <stdio.h>
 
 #if !defined(LK_DEBUGLEVEL)
 #define LK_DEBUGLEVEL 0
@@ -40,36 +40,47 @@ __BEGIN_CDECLS
 #define INFO 1
 #define SPEW 2
 
+__BEGIN_CDECLS
+
+typedef struct __print_callback print_callback_t;
+struct __print_callback {
+	struct list_node entry;
+	void (*print)(print_callback_t *cb, const char *str, size_t len);
+};
+
 #if !DISABLE_DEBUG_OUTPUT
 
 /* input/output */
-#define _dputc(c) platform_dputc(c)
-int _dputs(const char *str);
 int _dprintf(const char *fmt, ...) __PRINTFLIKE(1, 2);
-int _dvprintf(const char *fmt, va_list ap);
+
+// Obtain the panic file descriptor.
+FILE get_panic_fd(void);
 
 /* dump memory */
 void hexdump(const void *ptr, size_t len);
-void hexdump8(const void *ptr, size_t len);
+void hexdump8_ex(const void *ptr, size_t len, uint64_t disp_addr_start);
 
 #else
 
 /* input/output */
-static inline void _dputc(char c) { }
-static inline int _dputs(const char *str) { return 0; }
 static inline int __PRINTFLIKE(1, 2) _dprintf(const char *fmt, ...) { return 0; }
-static inline int _dvprintf(const char *fmt, va_list ap) { return 0; }
 
 /* dump memory */
 static inline void hexdump(const void *ptr, size_t len) { }
-static inline void hexdump8(const void *ptr, size_t len) { }
+static inline void hexdump8_ex(const void *ptr, size_t len, uint64_t disp_addr_start) { }
 
 #endif /* DISABLE_DEBUG_OUTPUT */
 
-#define dputc(level, str) do { if ((level) <= LK_DEBUGLEVEL) { _dputc(str); } } while (0)
-#define dputs(level, str) do { if ((level) <= LK_DEBUGLEVEL) { _dputs(str); } } while (0)
+static inline void hexdump8(const void *ptr, size_t len)
+{
+	hexdump8_ex(ptr, len, (uint64_t)((addr_t)ptr));
+}
+
+/* register callback to receive debug prints */
+void register_print_callback(print_callback_t *cb);
+void unregister_print_callback(print_callback_t *cb);
+
 #define dprintf(level, x...) do { if ((level) <= LK_DEBUGLEVEL) { _dprintf(x); } } while (0)
-#define dvprintf(level, x...) do { if ((level) <= LK_DEBUGLEVEL) { _dvprintf(x); } } while (0)
 
 /* systemwide halts */
 void _panic(void *caller, const char *fmt, ...) __PRINTFLIKE(2, 3) __NO_RETURN;
@@ -79,6 +90,9 @@ void _panic(void *caller, const char *fmt, ...) __PRINTFLIKE(2, 3) __NO_RETURN;
 
 /* spin the cpu for a period of (short) time */
 void spin(uint32_t usecs);
+
+/* spin the cpu for a certain number of cpu cycles */
+void spin_cycles(uint32_t usecs);
 
 __END_CDECLS
 

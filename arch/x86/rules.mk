@@ -2,8 +2,18 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
-GLOBAL_INCLUDES += \
-	$(LOCAL_DIR)/include
+WITH_KERNEL_VM=1
+
+GLOBAL_DEFINES += \
+	MEMBASE=0x00200000U \
+	KERNEL_ASPACE_BASE=0x00200000U \
+	KERNEL_ASPACE_SIZE=0x7fe00000U \
+	X86_WITH_FPU=1 \
+	SMP_MAX_CPUS=1
+
+
+KERNEL_BASE ?= 0x00200000
+KERNEL_LOAD_OFFSET ?= 0x0
 
 MODULE_SRCS += \
 	$(LOCAL_DIR)/crt0.S \
@@ -15,7 +25,8 @@ MODULE_SRCS += \
 	$(LOCAL_DIR)/thread.c \
 	$(LOCAL_DIR)/mmu.c \
 	$(LOCAL_DIR)/faults.c \
-	$(LOCAL_DIR)/descriptor.c
+	$(LOCAL_DIR)/descriptor.c \
+	$(LOCAL_DIR)/fpu.c
 
 # set the default toolchain to x86 elf and set a #define
 ifndef TOOLCHAIN_PREFIX
@@ -41,7 +52,6 @@ GENERATED += \
 	$(BUILDDIR)/kernel.ld
 
 # rules for generating the linker scripts
-
 $(BUILDDIR)/kernel.ld: $(LOCAL_DIR)/kernel.ld $(wildcard arch/*.ld)
 	@echo generating $@
 	@$(MKDIR)

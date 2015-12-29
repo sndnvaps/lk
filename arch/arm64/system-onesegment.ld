@@ -4,10 +4,11 @@ OUTPUT_ARCH(aarch64)
 ENTRY(_start)
 SECTIONS
 {
-    . = %MEMBASE%;
+    . = %KERNEL_BASE% + %KERNEL_LOAD_OFFSET%;
 
     /* text/read-only data */
-    .text : {
+    /* set the load address to physical MEMBASE */
+    .text : AT(%MEMBASE% + %KERNEL_LOAD_OFFSET%) {
         KEEP(*(.text.boot))
         KEEP(*(.text.boot.vectab))
         *(.text* .sram.text.glue_7* .gnu.linkonce.t.*)
@@ -45,22 +46,29 @@ SECTIONS
     .ARM.exidx : { *(.ARM.exidx* .gnu.linkonce.armexidx.*) }
     __exidx_end = .;
 
-    .rodata : ALIGN(8) {
+    .rodata : ALIGN(4096) {
         __rodata_start = .;
+        __fault_handler_table_start = .;
+        KEEP(*(.rodata.fault_handler_table))
+        __fault_handler_table_end = .;
         *(.rodata .rodata.* .gnu.linkonce.r.*)
-INCLUDE "arch/shared_rodata_sections.ld"
-        . = ALIGN(8);
+    }
+
+    /*
+     * extra linker scripts tend to insert sections just after .rodata,
+     * so we want to make sure this symbol comes after anything inserted above,
+     * but not aligned to the next section necessarily.
+     */
+    .dummy_post_rodata : {
         __rodata_end = .;
     }
 
-
-    .data : ALIGN(8) {
+    .data : ALIGN(4096) {
         /* writable data  */
         __data_start_rom = .;
         /* in one segment binaries, the rom data address is on top of the ram data address */
         __data_start = .;
         *(.data .data.* .gnu.linkonce.d.*)
-INCLUDE "arch/shared_data_sections.ld"
     }
 
     .ctors : ALIGN(8) {
@@ -76,7 +84,14 @@ INCLUDE "arch/shared_data_sections.ld"
     .got : { *(.got.plt) *(.got) }
     .dynamic : { *(.dynamic) }
 
-    __data_end = .;
+    /*
+     * extra linker scripts tend to insert sections just after .data,
+     * so we want to make sure this symbol comes after anything inserted above,
+     * but not aligned to the next section necessarily.
+     */
+    .dummy_post_data : {
+        __data_end = .;
+    }
 
     /* unintialized data (in same segment as writable data) */
     .bss : ALIGN(8) {
@@ -93,7 +108,7 @@ INCLUDE "arch/shared_data_sections.ld"
     . = ALIGN(8);
     _end = .;
 
-    . = %MEMBASE% + %MEMSIZE%;
+    . = %KERNEL_BASE% + %MEMSIZE%;
     _end_of_ram = .;
 
     /* Strip unnecessary stuff */

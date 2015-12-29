@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 Travis Geiselbrecht
+ * Copyright (c) 2008-2015 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -33,6 +33,66 @@
 #include <platform/debug.h>
 #include <kernel/thread.h>
 
+#if !DISABLE_DEBUG_OUTPUT
+static int _dvprintf(const char *fmt, va_list ap);
+#else
+static inline int _dvprintf(const char *fmt, va_list ap) { }
+#endif
+
+#if WITH_LIB_SM
+#define PRINT_LOCK_FLAGS SPIN_LOCK_FLAG_IRQ_FIQ
+#else
+#define PRINT_LOCK_FLAGS SPIN_LOCK_FLAG_INTERRUPTS
+#endif
+
+static spin_lock_t print_spin_lock = 0;
+static struct list_node print_callbacks = LIST_INITIAL_VALUE(print_callbacks);
+
+/* print lock must be held when invoking out, outs, outc */
+static void out_count(const char *str, size_t len)
+{
+	print_callback_t *cb;
+	size_t i;
+
+	/* print to any registered loggers */
+	if (!list_is_empty(&print_callbacks)) {
+		spin_lock_saved_state_t state;
+		spin_lock_save(&print_spin_lock, &state, PRINT_LOCK_FLAGS);
+
+		list_for_every_entry(&print_callbacks, cb, print_callback_t, entry) {
+			if (cb->print)
+				cb->print(cb, str, len);
+		}
+
+		spin_unlock_restore(&print_spin_lock, state, PRINT_LOCK_FLAGS);
+	}
+
+	/* write out the serial port */
+	for (i = 0; i < len; i++) {
+		platform_dputc(str[i]);
+	}
+}
+
+void register_print_callback(print_callback_t *cb)
+{
+	spin_lock_saved_state_t state;
+	spin_lock_save(&print_spin_lock, &state, PRINT_LOCK_FLAGS);
+
+	list_add_head(&print_callbacks, &cb->entry);
+
+	spin_unlock_restore(&print_spin_lock, state, PRINT_LOCK_FLAGS);
+}
+
+void unregister_print_callback(print_callback_t *cb)
+{
+	spin_lock_saved_state_t state;
+	spin_lock_save(&print_spin_lock, &state, PRINT_LOCK_FLAGS);
+
+	list_delete(&cb->entry);
+
+	spin_unlock_restore(&print_spin_lock, state, PRINT_LOCK_FLAGS);
+}
+
 void spin(uint32_t usecs)
 {
 	lk_bigtime_t start = current_time_hires();
@@ -55,13 +115,15 @@ void _panic(void *caller, const char *fmt, ...)
 
 static int __debug_stdio_fputc(void *ctx, int c)
 {
-	_dputc(c);
-	return 0;
+	char x = c;
+	out_count(&x, 1);
+	return c;
 }
 
 static int __debug_stdio_fputs(void *ctx, const char *s)
 {
-	return _dputs(s);
+	out_count(s, strlen(s));
+	return 0;
 }
 
 static int __debug_stdio_fgetc(void *ctx)
@@ -70,6 +132,17 @@ static int __debug_stdio_fgetc(void *ctx)
 	int err;
 
 	err = platform_dgetc(&c, true);
+	if (err < 0)
+		return err;
+	return (unsigned char)c;
+}
+
+static int __panic_stdio_fgetc(void *ctx)
+{
+	char c;
+	int err;
+
+	err = platform_pgetc(&c, false);
 	if (err < 0)
 		return err;
 	return (unsigned char)c;
@@ -96,46 +169,38 @@ FILE __stdio_FILEs[3] = {
 };
 #undef DEFINE_STDIO_DESC
 
-#if !DISABLE_DEBUG_OUTPUT
-
-int _dputs(const char *str)
+FILE get_panic_fd(void)
 {
-	while (*str != 0) {
-		_dputc(*str++);
-	}
+	FILE panic_fd;
+	panic_fd.fgetc = __panic_stdio_fgetc;
 
-	return 0;
+	panic_fd.fputc = __debug_stdio_fputc;
+	panic_fd.fputs = __debug_stdio_fputs;
+	panic_fd.vfprintf = __debug_stdio_vfprintf;
+	return panic_fd;
 }
+
+#if !DISABLE_DEBUG_OUTPUT
 
 static int _dprintf_output_func(const char *str, size_t len, void *state)
 {
-	size_t count = 0;
-	while (count < len && *str) {
-		_dputc(*str);
-		str++;
-		count++;
-	}
+	out_count(str, len);
+	return len;
+}
 
-	return count;
+int _dvprintf(const char *fmt, va_list ap)
+{
+	return _printf_engine(&_dprintf_output_func, NULL, fmt, ap);
 }
 
 int _dprintf(const char *fmt, ...)
 {
 	int err;
-
 	va_list ap;
+
 	va_start(ap, fmt);
 	err = _printf_engine(&_dprintf_output_func, NULL, fmt, ap);
 	va_end(ap);
-
-	return err;
-}
-
-int _dvprintf(const char *fmt, va_list ap)
-{
-	int err;
-
-	err = _printf_engine(&_dprintf_output_func, NULL, fmt, ap);
 
 	return err;
 }
@@ -176,17 +241,33 @@ void hexdump(const void *ptr, size_t len)
 	}
 }
 
-void hexdump8(const void *ptr, size_t len)
+void hexdump8_ex(const void *ptr, size_t len, uint64_t disp_addr)
 {
 	addr_t address = (addr_t)ptr;
 	size_t count;
 	size_t i;
+	const char* addr_fmt = ((disp_addr + len) > 0xFFFFFFFF)
+						 ? "0x%016llx: "
+						 : "0x%08llx: ";
 
 	for (count = 0 ; count < len; count += 16) {
-		printf("0x%08lx: ", address);
+		printf(addr_fmt, disp_addr + count);
+
 		for (i=0; i < MIN(len - count, 16); i++) {
-			printf("0x%02hhx ", *(const uint8_t *)(address + i));
+			printf("%02hhx ", *(const uint8_t *)(address + i));
 		}
+
+		for (; i < 16; i++) {
+			printf("   ");
+		}
+
+		printf("|");
+
+		for (i=0; i < MIN(len - count, 16); i++) {
+			char c = ((const char *)address)[i];
+			printf("%c", isprint(c) ? c : '.');
+		}
+
 		printf("\n");
 		address += 16;
 	}

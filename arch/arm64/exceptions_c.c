@@ -22,9 +22,18 @@
  */
 #include <stdio.h>
 #include <debug.h>
+#include <arch/arch_ops.h>
 #include <arch/arm64.h>
 
 #define SHUTDOWN_ON_FATAL 1
+
+struct fault_handler_table_entry {
+    uint64_t pc;
+    uint64_t fault_handler;
+};
+
+extern struct fault_handler_table_entry __fault_handler_table_start[];
+extern struct fault_handler_table_entry __fault_handler_table_end[];
 
 static void dump_iframe(const struct arm64_iframe_long *iframe)
 {
@@ -43,13 +52,37 @@ static void dump_iframe(const struct arm64_iframe_long *iframe)
 
 void arm64_sync_exception(struct arm64_iframe_long *iframe)
 {
-    printf("sync_exception\n");
-    dump_iframe(iframe);
-
+    struct fault_handler_table_entry *fault_handler;
     uint32_t esr = ARM64_READ_SYSREG(esr_el1);
     uint32_t ec = esr >> 26;
     uint32_t il = (esr >> 25) & 0x1;
     uint32_t iss = esr & ((1<<24) - 1);
+
+#ifdef WITH_LIB_SYSCALL
+    if (ec == 0x15 || ec == 0x11) { // syscall 64/32
+        void arm64_syscall(struct arm64_iframe_long *iframe);
+        arch_enable_fiqs();
+        arm64_syscall(iframe);
+        arch_disable_fiqs();
+        return;
+    }
+#endif
+
+    /* floating point */
+    if (ec == 0x07) {
+        arm64_fpu_exception(iframe);
+        return;
+    }
+
+    for (fault_handler = __fault_handler_table_start; fault_handler < __fault_handler_table_end; fault_handler++) {
+        if (fault_handler->pc == iframe->elr) {
+            iframe->elr = fault_handler->fault_handler;
+            return;
+        }
+    }
+
+    printf("sync_exception\n");
+    dump_iframe(iframe);
 
     printf("ESR 0x%x: ec 0x%x, il 0x%x, iss 0x%x\n", esr, ec, il, iss);
 

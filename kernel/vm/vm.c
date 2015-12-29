@@ -29,6 +29,7 @@
 #include <lk/init.h>
 #include <lib/console.h>
 #include <arch/mmu.h>
+#include <debug.h>
 
 #define LOCAL_TRACE 0
 
@@ -60,6 +61,8 @@ static void mark_pages_in_use(vaddr_t va, size_t len)
 
             /* alloate the range, throw the results away */
             pmm_alloc_range(pa, 1, &list);
+        } else {
+            panic("Could not find pa for va 0x%lx\n", va);
         }
     }
 }
@@ -178,4 +181,3 @@ STATIC_COMMAND_END(vm);
 
 LK_INIT_HOOK(vm_preheap, &vm_init_preheap, LK_INIT_LEVEL_HEAP - 1);
 LK_INIT_HOOK(vm, &vm_init_postheap, LK_INIT_LEVEL_VM);
-

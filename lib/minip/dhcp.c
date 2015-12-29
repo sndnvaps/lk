@@ -24,10 +24,10 @@
 #include "minip-internal.h"
 
 #include <err.h>
-#include <platform/gem.h>
 #include <platform.h>
 #include <stdio.h>
 #include <debug.h>
+#include <malloc.h>
 
 #include <kernel/thread.h>
 #include <sys/types.h>
@@ -228,13 +228,13 @@ static void dhcp_cb(void *data, size_t sz, uint32_t srcip, uint16_t srcport, voi
 			if (opt[1] == 4) memcpy(&netmask, opt + 2, 4);
 			break;
 		case OPT_ROUTERS:
-			if (opt[1] >= 4) memcpy(&gateway, opt + 3, 4);
+			if (opt[1] >= 4) memcpy(&gateway, opt + 2, 4);
 			break;
 		case OPT_DNS:
-			if (opt[1] >= 4) memcpy(&dns, opt + 3, 4);
+			if (opt[1] >= 4) memcpy(&dns, opt + 2, 4);
 			break;
 		case OPT_SERVER_ID:
-			if (opt[1] == 4) memcpy(&server, opt + 3, 4);
+			if (opt[1] == 4) memcpy(&server, opt + 2, 4);
 			break;
 		case OPT_DONE:
 			goto done;
@@ -287,7 +287,7 @@ void minip_init_dhcp(tx_func_t tx_func, void *tx_arg) {
 	int ret = udp_open(IPV4_BCAST, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, &dhcp_udp_handle);
 	printf("dhcp opened udp: %d\n", ret);
 
-	minip_udp_listen(DHCP_CLIENT_PORT, dhcp_cb, NULL);
+	udp_listen(DHCP_CLIENT_PORT, dhcp_cb, NULL);
 
 	dhcp_thr = thread_create("dhcp", dhcp_thread, NULL, DEFAULT_PRIORITY, DEFAULT_STACK_SIZE);
 	thread_detach_and_resume(dhcp_thr);

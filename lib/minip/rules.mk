@@ -3,9 +3,9 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 MODULE := $(LOCAL_DIR)
 
 MODULE_DEPS := \
-	lib/cbuf
-
-GLOBAL_INCLUDES += $(LOCAL_DIR)/include
+	lib/cbuf \
+	lib/iovec \
+	lib/pool
 
 MODULE_SRCS += \
 	$(LOCAL_DIR)/arp.c \
@@ -16,5 +16,6 @@ MODULE_SRCS += \
 	$(LOCAL_DIR)/net_timer.c \
 	$(LOCAL_DIR)/pktbuf.c \
 	$(LOCAL_DIR)/tcp.c \
+	$(LOCAL_DIR)/udp.c
 
 include make/module.mk

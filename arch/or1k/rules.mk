@@ -2,9 +2,6 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
-GLOBAL_INCLUDES += \
-	$(LOCAL_DIR)/include
-
 MODULE_SRCS += \
 	$(LOCAL_DIR)/start.S \
 	$(LOCAL_DIR)/arch.c \
@@ -14,6 +11,9 @@ MODULE_SRCS += \
 	$(LOCAL_DIR)/cache-ops.c \
 	$(LOCAL_DIR)/mmu.c \
 	$(LOCAL_DIR)/faults.c
+
+GLOBAL_DEFINES += \
+	SMP_MAX_CPUS=1
 
 # set the default toolchain to or1k elf and set a #define
 ifndef TOOLCHAIN_PREFIX
@@ -36,6 +36,10 @@ KERNEL_LOAD_OFFSET ?= 0
 GLOBAL_DEFINES += \
 	KERNEL_BASE=$(KERNEL_BASE) \
 	KERNEL_LOAD_OFFSET=$(KERNEL_LOAD_OFFSET)
+
+GLOBAL_DEFINES += \
+    MEMBASE=$(MEMBASE) \
+    MEMSIZE=$(MEMSIZE)
 
 # potentially generated files that should be cleaned out with clean make rule
 GENERATED += \

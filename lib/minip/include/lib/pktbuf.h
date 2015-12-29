@@ -28,34 +28,44 @@
 #include <list.h>
 
 /* PAGE_SIZE minus 16 bytes of metadata in pktbuf_buf */
-#define PKTBUF_SIZE		2032
-#define PKTBUF_MAX_DATA 1536
-#define PKTBUF_MAX_HDR (PKTBUF_SIZE - PKTBUF_MAX_DATA)
+#ifndef PKTBUF_POOL_SIZE
+#define PKTBUF_POOL_SIZE 256
+#endif
 
+#ifndef PKTBUF_SIZE
+#define	PKTBUF_SIZE		1536
+#endif
+
+/* How much space pktbuf_alloc should save for IP headers in the front of the buffer */
+#define PKTBUF_MAX_HDR  64
+/* The remaining space in the buffer */
+#define PKTBUF_MAX_DATA (PKTBUF_SIZE - PKTBUF_MAX_HDR)
+
+typedef void (*pktbuf_free_callback)(void *buf, void *arg);
 typedef struct pktbuf {
-	u32 magic;
 	u8 *data;
+	u32 blen;
 	u32 dlen;
-	u32 phys_base;
-	u32 id;
+	paddr_t phys_base;
 	struct list_node list;
-	bool managed;
-	bool eof;
+	u32 flags;
+	pktbuf_free_callback cb;
+	void *cb_args;
 	u8 *buffer;
 } pktbuf_t;
 
-/* metadata is stored at the end of the structure to catch overflows of
- * the packet data itself */
+typedef struct pktbuf_pool_object {
+	union {
+		pktbuf_t p;
+		uint8_t b[PKTBUF_SIZE];
+	};
+} pktbuf_pool_object_t;
 
-#define PKTBUF_HDR_MAGIC 'PKTH'
-#define PKTBUF_BUF_MAGIC 'PKTB'
-
-typedef struct pktbuf_buf {
-	uint8_t data[PKTBUF_SIZE];
-	uint32_t magic;
-	uintptr_t phys_addr;
-	struct list_node list;
-} pktbuf_buf_t;
+#define PKTBUF_FLAG_CKSUM_IP_GOOD  (1<<0)
+#define PKTBUF_FLAG_CKSUM_TCP_GOOD (1<<1)
+#define PKTBUF_FLAG_CKSUM_UDP_GOOD (1<<2)
+#define PKTBUF_FLAG_EOF			   (1<<3)
+#define PKTBUF_FLAG_CACHED		   (1<<4)
 
 /* Return the physical address offset of data in the packet */
 static inline u32 pktbuf_data_phys(pktbuf_t *p) {
@@ -69,12 +79,16 @@ static inline u32 pktbuf_avail_head(pktbuf_t *p) {
 
 // number of bytes available for _append or _append_data
 static inline u32 pktbuf_avail_tail(pktbuf_t *p) {
-	return PKTBUF_SIZE - (p->data - p->buffer) - p->dlen;
+	return p->blen - (p->data - p->buffer) - p->dlen;
 }
 
 // allocate packet buffer from buffer pool
 pktbuf_t *pktbuf_alloc(void);
+pktbuf_t *pktbuf_alloc_empty(void);
 
+/* Add a buffer to an existing packet buffer */
+void pktbuf_add_buffer(pktbuf_t *p, u8 *buf, u32 len, uint32_t header_sz,
+		uint32_t flags, pktbuf_free_callback cb, void *cb_args);
 // return packet buffer to buffer pool
 // returns number of threads woken up
 int pktbuf_free(pktbuf_t *p, bool reschedule);

@@ -47,6 +47,7 @@ __BEGIN_CDECLS
 #else
 #error unhandled arm isa
 #endif
+#define NOP __asm__ volatile("nop");
 
 void arm_context_switch(vaddr_t *old_sp, vaddr_t new_sp);
 
@@ -54,74 +55,87 @@ void arm_chain_load(paddr_t entry, ulong arg0, ulong arg1, ulong arg2, ulong arg
 
 static inline uint32_t read_cpsr(void)
 {
-	uint32_t cpsr;
+    uint32_t cpsr;
 
-	__asm__ volatile("mrs   %0, cpsr" : "=r" (cpsr));
-	return cpsr;
+    __asm__ volatile("mrs   %0, cpsr" : "=r" (cpsr));
+    return cpsr;
 }
+
+#define CPSR_MODE_MASK 0x1f
+#define CPSR_MODE_USR 0x10
+#define CPSR_MODE_FIQ 0x11
+#define CPSR_MODE_IRQ 0x12
+#define CPSR_MODE_SVC 0x13
+#define CPSR_MODE_MON 0x16
+#define CPSR_MODE_ABT 0x17
+#define CPSR_MODE_UND 0x1b
+#define CPSR_MODE_SYS 0x1f
+#define CPSR_THUMB    (1<<5)
+#define CPSR_FIQ_MASK (1<<6)
+#define CPSR_IRQ_MASK (1<<7)
+#define CPSR_ABORT    (1<<8)
+#define CPSR_ENDIAN   (1<<9)
 
 struct arm_iframe {
 #if ARM_WITH_VFP
-	uint32_t fpexc;
+    uint32_t fpexc;
 #endif
-	uint32_t usp;
-	uint32_t ulr;
-	uint32_t r0;
-	uint32_t r1;
-	uint32_t r2;
-	uint32_t r3;
-	uint32_t r12;
-	uint32_t lr;
-	uint32_t pc;
-	uint32_t spsr;
+    uint32_t usp;
+    uint32_t ulr;
+    uint32_t r0;
+    uint32_t r1;
+    uint32_t r2;
+    uint32_t r3;
+    uint32_t r12;
+    uint32_t lr;
+    uint32_t pc;
+    uint32_t spsr;
 };
 
 struct arm_fault_frame {
 #if ARM_WITH_VFP
-	uint32_t fpexc;
+    uint32_t fpexc;
 #endif
-	uint32_t usp;
-	uint32_t ulr;
-	uint32_t r[13];
-	uint32_t pc;
-	uint32_t spsr;
+    uint32_t usp;
+    uint32_t ulr;
+    uint32_t r[13];
+    uint32_t lr;
+    uint32_t pc;
+    uint32_t spsr;
 };
 
-#define MODE_MASK 0x1f
-#define MODE_USR 0x10
-#define MODE_FIQ 0x11
-#define MODE_IRQ 0x12
-#define MODE_SVC 0x13
-#define MODE_MON 0x16
-#define MODE_ABT 0x17
-#define MODE_UND 0x1b
-#define MODE_SYS 0x1f
-
 struct arm_mode_regs {
-	uint32_t fiq_r13, fiq_r14;
-	uint32_t irq_r13, irq_r14;
-	uint32_t svc_r13, svc_r14;
-	uint32_t abt_r13, abt_r14;
-	uint32_t und_r13, und_r14;
-	uint32_t sys_r13, sys_r14;
+    uint32_t usr_r13, usr_r14;
+    uint32_t fiq_r13, fiq_r14;
+    uint32_t irq_r13, irq_r14;
+    uint32_t svc_r13, svc_r14;
+    uint32_t abt_r13, abt_r14;
+    uint32_t und_r13, und_r14;
+    uint32_t sys_r13, sys_r14;
 };
 
 void arm_save_mode_regs(struct arm_mode_regs *regs);
 
 #define GEN_CP_REG_FUNCS(cp, reg, op1, c1, c2, op2) \
 static inline __ALWAYS_INLINE uint32_t arm_read_##reg(void) { \
-	uint32_t val; \
-	__asm__ volatile("mrc " #cp ", " #op1 ", %0, " #c1 ","  #c2 "," #op2 : "=r" (val)); \
-	return val; \
+    uint32_t val; \
+    __asm__ volatile("mrc " #cp ", " #op1 ", %0, " #c1 ","  #c2 "," #op2 : "=r" (val)); \
+    return val; \
+} \
+\
+static inline __ALWAYS_INLINE uint32_t arm_read_##reg##_relaxed(void) { \
+    uint32_t val; \
+    __asm__("mrc " #cp ", " #op1 ", %0, " #c1 ","  #c2 "," #op2 : "=r" (val)); \
+    return val; \
 } \
 \
 static inline __ALWAYS_INLINE void arm_write_##reg(uint32_t val) { \
-	__asm__ volatile("mcr " #cp ", " #op1 ", %0, " #c1 ","  #c2 "," #op2 :: "r" (val)); \
-	ISB; \
+    __asm__ volatile("mcr " #cp ", " #op1 ", %0, " #c1 ","  #c2 "," #op2 :: "r" (val)); \
+    ISB; \
 } \
 \
 static inline __ALWAYS_INLINE void arm_write_##reg##_relaxed(uint32_t val) { \
-	__asm__ volatile("mcr " #cp ", " #op1 ", %0, " #c1 ","  #c2 "," #op2 :: "r" (val)); \
+    __asm__ volatile("mcr " #cp ", " #op1 ", %0, " #c1 ","  #c2 "," #op2 :: "r" (val)); \
 }
 
 #define GEN_CP15_REG_FUNCS(reg, op1, c1, c2, op2) \
@@ -156,6 +170,7 @@ GEN_CP15_REG_FUNCS(tpidrprw, 0, c13, c0, 4);
 GEN_CP15_REG_FUNCS(midr, 0, c0, c0, 0);
 GEN_CP15_REG_FUNCS(mpidr, 0, c0, c0, 5);
 GEN_CP15_REG_FUNCS(vbar, 0, c12, c0, 0);
+GEN_CP15_REG_FUNCS(cbar, 4, c15, c0, 0);
 
 GEN_CP15_REG_FUNCS(ats1cpr, 0, c7, c8, 0);
 GEN_CP15_REG_FUNCS(ats1cpw, 0, c7, c8, 1);
@@ -166,6 +181,11 @@ GEN_CP15_REG_FUNCS(ats12nsopw, 0, c7, c8, 5);
 GEN_CP15_REG_FUNCS(ats12nsour, 0, c7, c8, 6);
 GEN_CP15_REG_FUNCS(ats12nsouw, 0, c7, c8, 7);
 GEN_CP15_REG_FUNCS(par, 0, c7, c4, 0);
+
+/* Branch predictor invalidate */
+GEN_CP15_REG_FUNCS(bpiall, 0, c7, c5, 6);
+GEN_CP15_REG_FUNCS(bpimva, 0, c7, c5, 7);
+GEN_CP15_REG_FUNCS(bpiallis, 0, c7, c1, 6);
 
 /* tlb registers */
 GEN_CP15_REG_FUNCS(tlbiallis, 0, c8, c3, 0);
@@ -182,6 +202,9 @@ GEN_CP15_REG_FUNCS(tlbiall, 0, c8, c7, 0);
 GEN_CP15_REG_FUNCS(tlbimva, 0, c8, c7, 1);
 GEN_CP15_REG_FUNCS(tlbiasid, 0, c8, c7, 2);
 GEN_CP15_REG_FUNCS(tlbimvaa, 0, c8, c7, 3);
+
+GEN_CP15_REG_FUNCS(l2ctlr, 1, c9, c0, 2);
+GEN_CP15_REG_FUNCS(l2ectlr, 1, c9, c0, 3);
 
 /* debug registers */
 GEN_CP14_REG_FUNCS(dbddidr, 0, c0, c0, 0);

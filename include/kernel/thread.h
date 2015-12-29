@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2014 Travis Geiselbrecht
+ * Copyright (c) 2008-2015 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -30,7 +30,19 @@
 #include <arch/ops.h>
 #include <arch/thread.h>
 #include <kernel/wait.h>
+#include <kernel/spinlock.h>
 #include <debug.h>
+
+__BEGIN_CDECLS;
+
+/* debug-enable runtime checks */
+#if LK_DEBUGLEVEL > 1
+#define THREAD_STATS 1
+#define THREAD_STACK_BOUNDS_CHECK 1
+#ifndef THREAD_STACK_PADDING_SIZE
+#define THREAD_STACK_PADDING_SIZE 256
+#endif
+#endif
 
 enum thread_state {
 	THREAD_SUSPENDED = 0,
@@ -45,13 +57,21 @@ typedef int (*thread_start_routine)(void *arg);
 
 /* thread local storage */
 enum thread_tls_list {
+#ifdef WITH_LIB_UTHREAD
+	TLS_ENTRY_UTHREAD,
+#endif
+#ifdef WITH_LIB_LKUSER
+	TLS_ENTRY_LKUSER,
+#endif
 	MAX_TLS_ENTRY
 };
 
-#define THREAD_FLAG_DETACHED 0x1
-#define THREAD_FLAG_FREE_STACK 0x2
-#define THREAD_FLAG_FREE_STRUCT 0x4
-#define THREAD_FLAG_REAL_TIME 0x8
+#define THREAD_FLAG_DETACHED                  (1<<0)
+#define THREAD_FLAG_FREE_STACK                (1<<1)
+#define THREAD_FLAG_FREE_STRUCT               (1<<2)
+#define THREAD_FLAG_REAL_TIME                 (1<<3)
+#define THREAD_FLAG_IDLE                      (1<<4)
+#define THREAD_FLAG_DEBUG_STACK_BOUNDS_CHECK  (1<<5)
 
 #define THREAD_MAGIC 'thrd'
 
@@ -63,9 +83,10 @@ typedef struct thread {
 	struct list_node queue_node;
 	int priority;
 	enum thread_state state;
-	int saved_critical_section_count;
 	int remaining_quantum;
 	unsigned int flags;
+	int curr_cpu;
+	int pinned_cpu; /* only run on pinned_cpu if >= 0 */
 
 	/* if blocked, a pointer to the wait queue */
 	struct wait_queue *blocking_wait_queue;
@@ -113,6 +134,8 @@ typedef struct thread {
 void thread_init_early(void);
 void thread_init(void);
 void thread_become_idle(void) __NO_RETURN;
+void thread_secondary_cpu_init_early(void);
+void thread_secondary_cpu_entry(void) __NO_RETURN;
 void thread_set_name(const char *name);
 void thread_set_priority(int priority);
 thread_t *thread_create(const char *name, thread_start_routine entry, void *arg, int priority, size_t stack_size);
@@ -126,6 +149,7 @@ status_t thread_detach_and_resume(thread_t *t);
 status_t thread_set_real_time(thread_t *t);
 
 void dump_thread(thread_t *t);
+void arch_dump_thread(thread_t *t);
 void dump_all_threads(void);
 
 /* scheduler routines */
@@ -134,6 +158,10 @@ void thread_preempt(void); /* get preempted (inserted into head of run queue) */
 void thread_block(void); /* block on something and reschedule */
 void thread_unblock(thread_t *t, bool resched); /* go back in the run queue */
 
+#ifdef WITH_LIB_UTHREAD
+void uthread_context_switch(thread_t *oldthread, thread_t *newthread);
+#endif
+
 /* called on every timer tick for the scheduler to do quantum expiration */
 enum handler_return thread_timer_tick(void);
 
@@ -141,36 +169,11 @@ enum handler_return thread_timer_tick(void);
 thread_t *get_current_thread(void);
 void set_current_thread(thread_t *);
 
-/* critical sections */
-extern int critical_section_count;
+/* scheduler lock */
+extern spin_lock_t thread_lock;
 
-static inline __ALWAYS_INLINE void enter_critical_section(void)
-{
-	CF;
-	if (critical_section_count == 0)
-		arch_disable_ints();
-	critical_section_count++;
-	CF;
-}
-
-static inline __ALWAYS_INLINE void exit_critical_section(void)
-{
-	CF;
-	critical_section_count--;
-	if (critical_section_count == 0)
-		arch_enable_ints();
-	CF;
-}
-
-static inline __ALWAYS_INLINE bool in_critical_section(void)
-{
-	CF;
-	return critical_section_count > 0;
-}
-
-/* only used by interrupt glue */
-static inline void inc_critical_section(void) { critical_section_count++; }
-static inline void dec_critical_section(void) { critical_section_count--; }
+#define THREAD_LOCK(state) spin_lock_saved_state_t state; spin_lock_irqsave(&thread_lock, state)
+#define THREAD_UNLOCK(state) spin_unlock_irqrestore(&thread_lock, state)
 
 /* thread local storage */
 static inline __ALWAYS_INLINE uintptr_t tls_get(uint entry)
@@ -178,35 +181,40 @@ static inline __ALWAYS_INLINE uintptr_t tls_get(uint entry)
 	return get_current_thread()->tls[entry];
 }
 
-static inline __ALWAYS_INLINE uintptr_t tls_set(uint entry, uintptr_t val)
+static inline __ALWAYS_INLINE uintptr_t __tls_set(uint entry, uintptr_t val)
 {
 	uintptr_t oldval = get_current_thread()->tls[entry];
 	get_current_thread()->tls[entry] = val;
 	return oldval;
 }
 
+#define tls_set(e,v) \
+	({ \
+		STATIC_ASSERT((e) < MAX_TLS_ENTRY); \
+		__tls_set(e, v); \
+	})
+
 /* thread level statistics */
-#if LK_DEBUGLEVEL > 1
-#define THREAD_STATS 1
-#else
-#define THREAD_STATS 0
-#endif
 #if THREAD_STATS
 struct thread_stats {
 	lk_bigtime_t idle_time;
 	lk_bigtime_t last_idle_timestamp;
-	int reschedules;
-	int context_switches;
-	int preempts;
-	int yields;
-	int interrupts; /* platform code increment this */
-	int timer_ints; /* timer code increment this */
-	int timers; /* timer code increment this */
+	ulong reschedules;
+	ulong context_switches;
+	ulong preempts;
+	ulong yields;
+	ulong interrupts; /* platform code increment this */
+	ulong timer_ints; /* timer code increment this */
+	ulong timers; /* timer code increment this */
+
+#if WITH_SMP
+	ulong reschedule_ipis;
+#endif
 };
 
-extern struct thread_stats thread_stats;
+extern struct thread_stats thread_stats[SMP_MAX_CPUS];
 
-#define THREAD_STATS_INC(name) do { thread_stats.name++; } while(0)
+#define THREAD_STATS_INC(name) do { thread_stats[arch_curr_cpu_num()].name++; } while(0)
 
 #else
 
@@ -214,5 +222,8 @@ extern struct thread_stats thread_stats;
 
 #endif
 
+__END_CDECLS;
+
 #endif
 
+/* vim: set ts=4 sw=4 noexpandtab: */

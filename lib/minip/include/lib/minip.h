@@ -60,17 +60,16 @@ void minip_set_ipaddr(const uint32_t addr);
 void minip_set_hostname(const char *name);
 const char *minip_get_hostname(void);
 
-typedef struct {
-    uint32_t host;
-    uint16_t sport;
-    uint16_t dport;
-    uint8_t *mac;
-} udp_socket_t;
+uint32_t minip_parse_ipaddr(const char *addr, size_t len);
 
+/* udp */
+typedef struct udp_socket udp_socket_t;
+
+int udp_listen(uint16_t port, udp_callback_t cb, void *arg);
 status_t udp_open(uint32_t host, uint16_t sport, uint16_t dport, udp_socket_t **handle);
-status_t udp_close(udp_socket_t *handle);
 status_t udp_send(void *buf, size_t len, udp_socket_t *handle);
-int minip_udp_listen(uint16_t port, udp_callback_t cb, void *arg);
+status_t udp_close(udp_socket_t *handle);
+
 /* tcp */
 typedef struct tcp_socket tcp_socket_t;
 
@@ -84,5 +83,8 @@ static inline status_t tcp_accept(tcp_socket_t *listen_socket, tcp_socket_t **ac
 {
     return tcp_accept_timeout(listen_socket, accept_socket, INFINITE_TIME);
 }
+
+/* utilities */
+void gen_random_mac_address(uint8_t *mac_addr);
 
 // vim: set ts=4 sw=4 expandtab:
