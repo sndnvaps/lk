@@ -29,6 +29,8 @@
 #define FS_MAX_PATH_LEN 128
 #define FS_MAX_FILE_LEN 64
 
+__BEGIN_CDECLS;
+
 // Generic FS ioctls
 enum fs_ioctl_num {
     FS_IOCTL_NULL = 0,
@@ -70,6 +72,7 @@ ssize_t fs_read_file(filehandle *handle, void *buf, off_t offset, size_t len) __
 ssize_t fs_write_file(filehandle *handle, const void *buf, off_t offset, size_t len) __NONNULL();
 status_t fs_close_file(filehandle *handle) __NONNULL();
 status_t fs_stat_file(filehandle *handle, struct file_stat *) __NONNULL((1));
+status_t fs_truncate_file(filehandle *handle, uint64_t len) __NONNULL((1));
 
 /* dir api */
 status_t fs_make_dir(const char *path) __NONNULL();
@@ -103,6 +106,7 @@ struct fs_api {
     status_t (*open)(fscookie *, const char *, filecookie **);
     status_t (*create)(fscookie *, const char *, filecookie **, uint64_t);
     status_t (*remove)(fscookie *, const char *);
+    status_t (*truncate)(filecookie *, uint64_t);
     status_t (*stat)(filecookie *, struct file_stat *);
     ssize_t (*read)(filecookie *, void *, off_t, size_t);
     ssize_t (*write)(filecookie *, const void *, off_t, size_t);
@@ -125,3 +129,4 @@ struct fs_impl {
 #define STATIC_FS_IMPL(_name, _api) const struct fs_impl __fs_impl_##_name __ALIGNED(sizeof(void *)) __SECTION(".fs_impl") = \
     { .name = #_name, .api = _api }
 
+__END_CDECLS

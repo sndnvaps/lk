@@ -31,6 +31,9 @@ make-make:
 endif
 endif
 
+# some additional rules to print some help
+include make/help.mk
+
 ifeq ($(do-nothing),)
 
 ifeq ($(PROJECT),)
@@ -38,7 +41,7 @@ ifeq ($(PROJECT),)
 ifneq ($(DEFAULT_PROJECT),)
 PROJECT := $(DEFAULT_PROJECT)
 else
-$(error No project specified.  Use "make projectname" or put "PROJECT := projectname" in local.mk)
+$(error No project specified. Use 'make list' for a list of projects or 'make help' for additional help)
 endif
 endif
 
@@ -51,11 +54,11 @@ CONFIGHEADER := $(BUILDDIR)/config.h
 
 GLOBAL_INCLUDES := $(BUILDDIR) $(addsuffix /include,$(LKINC))
 GLOBAL_OPTFLAGS ?= $(ARCH_OPTFLAGS)
-GLOBAL_COMPILEFLAGS := -g -fno-builtin -finline -include $(CONFIGHEADER)
+GLOBAL_COMPILEFLAGS := -g -finline -include $(CONFIGHEADER)
 GLOBAL_COMPILEFLAGS += -W -Wall -Wno-multichar -Wno-unused-parameter -Wno-unused-function -Wno-unused-label -Werror=return-type
-GLOBAL_CFLAGS := --std=gnu99 -Werror-implicit-function-declaration -Wstrict-prototypes -Wwrite-strings
+GLOBAL_CFLAGS := --std=gnu11 -Werror-implicit-function-declaration -Wstrict-prototypes -Wwrite-strings
 #GLOBAL_CFLAGS += -Werror
-GLOBAL_CPPFLAGS := -fno-exceptions -fno-rtti -fno-threadsafe-statics
+GLOBAL_CPPFLAGS := --std=c++11 -fno-exceptions -fno-rtti -fno-threadsafe-statics
 #GLOBAL_CPPFLAGS += -Weffc++
 GLOBAL_ASMFLAGS := -DASSEMBLY
 GLOBAL_LDFLAGS :=

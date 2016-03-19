@@ -305,8 +305,7 @@ static status_t spifs_commit_toc(spifs_t *spifs)
     cursor += SPIFS_ENTRY_LENGTH;
 
     // Create an empty file to copy into the empty spots in the ToC
-    toc_file_t empty;
-    memset(&empty, 0, SPIFS_ENTRY_LENGTH);
+    static const toc_file_t empty = { 0 };
 
     spifs_file_t *file = list_peek_head_type(&spifs->files, spifs_file_t, node);
     for (uint32_t i = 0; i < spifs->num_entries; i++) {
@@ -341,10 +340,9 @@ static status_t spifs_commit_toc(spifs_t *spifs)
         (spifs->page + spifs->page_size) - SPIFS_ENTRY_LENGTH;
     DEBUG_ASSERT(cursor == expected_cursor_location);
 
-    toc_footer_t footer;
-    memset(&footer, 0, SPIFS_ENTRY_LENGTH);
-    footer.checksum = crc;
-    memcpy(cursor, (uint8_t *)&footer, SPIFS_ENTRY_LENGTH);
+    toc_footer_t *footer = (toc_footer_t *)cursor;
+    memset(footer, 0, SPIFS_ENTRY_LENGTH);
+    footer->checksum = crc;
 
     err = spifs_write_page(spifs, toc_page_addr);
     if (err != NO_ERROR)
@@ -1034,6 +1032,34 @@ err:
     return len == 0 ? (ssize_t)size : err;
 }
 
+static status_t spifs_truncate(filecookie *fcookie, uint64_t len)
+{
+    LTRACEF("filecookie %p, len %llu\n", fcookie, len);
+
+    status_t rc = NO_ERROR;
+
+    spifs_file_t *file = (spifs_file_t *)fcookie;
+
+    mutex_acquire(&file->fs_handle->lock);
+
+    spifs_t *spifs = (spifs_t *)(file->fs_handle);
+
+    // Can't use truncate to grow a file.
+    if (len > file->metadata.length) {
+        rc = ERR_INVALID_ARGS;
+        goto finish;
+    }
+
+    file->metadata.length = len;
+
+    rc = spifs_commit_toc(spifs);
+
+finish:
+    mutex_release(&file->fs_handle->lock);
+
+    return rc;
+}
+
 static status_t spifs_stat(filecookie *fcookie, struct file_stat *stat)
 {
     LTRACEF("filecookie %p stat %p\n", fcookie, stat);
@@ -1196,6 +1222,7 @@ static const struct fs_api spifs_api = {
 
     .read = spifs_read,
     .write = spifs_write,
+    .truncate = spifs_truncate,
 
     .stat = spifs_stat,
 
